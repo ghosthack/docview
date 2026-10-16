@@ -1,0 +1,267 @@
+/**
+ * Copyright (c) 2015-2017 Angelo ZERR.
+ * This program and the accompanying materials are made
+ * available under the terms of the Eclipse Public License 2.0
+ * which is available at https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Initial code from https://github.com/microsoft/vscode/
+ * Initial copyright Copyright (C) Microsoft Corporation. All rights reserved.
+ * Initial license: MIT
+ *
+ * Contributors:
+ * - Microsoft Corporation: Initial code, written in TypeScript, licensed under MIT license
+ * - Angelo Zerr <angelo.zerr@gmail.com> - translation and adaptation to Java
+ */
+package io.github.ghosthack.docview.textmate.internal.tm4e.core.model;
+
+import static io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.utils.NullSafetyHelper.castNonNull;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BiFunction;
+
+import org.eclipse.jdt.annotation.NonNull;
+import org.eclipse.jdt.annotation.Nullable;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.grammar.IGrammar;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.grammar.IStateStack;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.grammar.LineTokens.Token;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.grammar.StateStack;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.utils.MoreCollections;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.utils.StringUtils;
+
+/**
+ * @see <a href=
+ *      "https://github.com/microsoft/vscode/blob/ba2cf46e20df3edf77bdd905acde3e175d985f70/src/vs/workbench/services/textMate/browser/tokenizationSupport/textMateTokenizationSupport.ts#L14">
+ *      github.com/microsoft/vscode/main/src/vs/workbench/services/textMate/browser/tokenizationSupport/textMateTokenizationSupport.ts
+ *      <code>#TextMateTokenizationSupport</code></a>
+ * @see <a href=
+ *      "https://github.com/microsoft/vscode/blob/e80e4e6fd20cf045dd6c77eb4790dce06f158736/src/vs/workbench/services/textMate/common/TMTokenization.ts">
+ *      github.com/microsoft/vscode/main/src/vs/workbench/services/textMate/common/TMTokenization.ts (old)</a>
+ * @see <a href=
+ *      "https://github.com/microsoft/vscode/blob/70d250824ef66ef09f04c4084b804d5f353fb704/src/vs/editor/node/textMate/TMSyntax.ts#L120">
+ *      github.com/microsoft/vscode/main/src/vs/editor/node/textMate/TMSyntax.ts (old)</a>
+ */
+public class TMTokenizationSupport implements ITokenizationSupport {
+
+	private final IGrammar _grammar;
+	private final IStateStack _initialState;
+	private final DecodeMap decodeMap = new DecodeMap();
+
+	public TMTokenizationSupport(final IGrammar grammar) {
+		this(grammar, StateStack.NULL);
+	}
+
+	public TMTokenizationSupport(final IGrammar grammar, final IStateStack initialState) {
+		this._grammar = grammar;
+		_initialState = initialState;
+	}
+
+	@Override
+	public IStateStack getInitialState() {
+		return _initialState;
+	}
+
+	@Override
+	public TokenizationResult tokenize(final String line, final @Nullable IStateStack state) {
+		return tokenize(line, state, 0, null);
+	}
+
+	@Override
+	public TokenizationResult tokenize(final String line,
+			final @Nullable IStateStack state,
+			final int offsetDelta,
+			final @Nullable Duration timeLimit) {
+
+		final var tokenizationResult = _grammar.tokenizeLine(line, state, timeLimit);
+		final var tokens = (Token[]) tokenizationResult.getTokens();
+
+		// Create the result early and fill in the tokens later
+		final var tmTokens = new ArrayList<TMToken>(tokens.length < 10 ? tokens.length : 10);
+		String lastTokenType = null;
+		for (final Token token : tokens) {
+			final String tokenType = decodeTextMateTokenCached.apply(decodeMap, token.scopes);
+
+			// do not push a new token if the type is exactly the same (also helps with ligatures)
+			if (!tokenType.equals(lastTokenType)) {
+
+				// custom tm4e code - not from upstream (for TMPartitioner)
+				// Why we look up a preferred root from scopes:
+				// The frame-level hint (token.getGrammarScope()) can lag behind in embedded regions
+				// when outer rules produce tokens (e.g., whitespace, punctuation). The scopes list
+				// always reflects the innermost effective root (last source.* or text.*). Use that
+				// when it differs from the base grammar; otherwise keep the hint for stability.
+				final String baseScope = _grammar.getScopeName();
+				final String preferredFromScopes = choosePreferredScope(token.scopes, baseScope);
+				final String tokenGrammarScope = token.grammarScope == null
+						|| preferredFromScopes != null && !preferredFromScopes.equals(baseScope)
+								? preferredFromScopes
+								: token.grammarScope;
+				tmTokens.add(new TMToken(token.startIndex + offsetDelta, tokenType, token.scopes, tokenGrammarScope));
+				lastTokenType = tokenType;
+			}
+		}
+
+		final var lastToken = tokens[tokens.length - 1];
+
+		return new TokenizationResult(
+				tmTokens,
+
+				// TODO Math.min() is a temporary workaround because currently in some cases lastToken.getEndIndex()
+				// incorrectly returns larger values than line.length() for some reasons.
+				// See for example GrammarTest#testTokenize1IllegalToken()
+				offsetDelta + Math.min(line.length(), lastToken.endIndex),
+
+				tokenizationResult.getRuleStack(),
+				tokenizationResult.isStoppedEarly());
+	}
+
+	private static @Nullable String choosePreferredScope(final List<String> scopes, final @Nullable String baseScope) {
+		// custom tm4e code - not from upstream (for TMPartitioner)
+		String lastSource = null;
+		String lastText = null;
+		for (final String scope : scopes) {
+			if (scope.endsWith("-ignored-vscode") || "source.unknown".equals(scope) || "text.unknown".equals(scope)) {
+				continue;
+			}
+			if (scope.startsWith("source.")) {
+				lastSource = scope;
+			} else if (scope.startsWith("text.")) {
+				lastText = scope;
+			}
+		}
+
+		if (lastSource != null && !lastSource.equals(baseScope))
+			return lastSource;
+		if (lastText != null && !lastText.equals(baseScope))
+			return lastText;
+		if (lastSource != null)
+			return lastSource;
+		if (lastText != null)
+			return lastText;
+		return baseScope;
+	}
+
+	private final BiFunction<DecodeMap, List<String>, String> decodeTextMateTokenCached = new BiFunction<>() {
+		private static final long EXPIRE_AFTER_ACCESS_MS = 5_000;
+
+		static final class CacheEntry {
+			CacheEntry(final String tokenType) {
+				this.tokenType = tokenType;
+			}
+
+			final String tokenType;
+			long lastAccessed;
+		}
+
+		private final Map<List<String>, CacheEntry> cache = new HashMap<>();
+		private long lastCacheCleanup = System.currentTimeMillis();
+
+		@Override
+		public String apply(final DecodeMap decodeMap, final List<String> scopes) {
+			final var entry = cache.computeIfAbsent(scopes, s -> new CacheEntry(decodeTextMateToken(decodeMap, s)));
+			final var now = System.currentTimeMillis();
+			entry.lastAccessed = now;
+			if (now - lastCacheCleanup > EXPIRE_AFTER_ACCESS_MS) {
+				lastCacheCleanup = now;
+				cache.values().removeIf(e -> now - e.lastAccessed > EXPIRE_AFTER_ACCESS_MS);
+			}
+			return entry.tokenType;
+		}
+	};
+
+	/**
+	 * https://github.com/microsoft/vscode/blob/70d250824ef66ef09f04c4084b804d5f353fb704/src/vs/editor/node/textMate/TMSyntax.ts#L251
+	 */
+	private String decodeTextMateToken(final DecodeMap decodeMap, final List<String> scopes) {
+		final var prevTokenScopes = decodeMap.prevToken.scopes;
+		final int prevTokenScopesLength = prevTokenScopes.size();
+		final var prevTokenScopeTokensMaps = decodeMap.prevToken.scopeTokensMaps;
+
+		final var scopeTokensMaps = new HashMap<Integer /* level */, Map<Integer, Boolean>>();
+		Map<Integer, Boolean> prevScopeTokensMaps = new HashMap<>();
+		boolean sameAsPrev = true;
+		for (int level = 1/* deliberately skip scope 0 */, scopeLength = scopes.size(); level < scopeLength; level++) {
+			final String scope = scopes.get(level);
+
+			if (sameAsPrev) {
+				if (level < prevTokenScopesLength && prevTokenScopes.get(level).equals(scope)) {
+					prevScopeTokensMaps = castNonNull(prevTokenScopeTokensMaps.get(level));
+					scopeTokensMaps.put(level, prevScopeTokensMaps);
+					continue;
+				}
+				sameAsPrev = false;
+			}
+
+			final Integer[] tokens = decodeMap.getTokenIds(scope);
+			prevScopeTokensMaps = new HashMap<>(prevScopeTokensMaps);
+			for (final Integer token : tokens) {
+				prevScopeTokensMaps.put(token, true);
+			}
+			scopeTokensMaps.put(level, prevScopeTokensMaps);
+		}
+
+		decodeMap.prevToken = new TMTokenDecodeData(scopes, scopeTokensMaps);
+		return decodeMap.getToken(prevScopeTokensMaps);
+	}
+
+	private record TMTokenDecodeData(
+			List<String> scopes,
+			Map<Integer /* level */, Map<Integer, Boolean>> scopeTokensMaps) {
+	}
+
+	/**
+	 * https://github.com/microsoft/vscode/blob/70d250824ef66ef09f04c4084b804d5f353fb704/src/vs/editor/node/textMate/TMSyntax.ts#L129
+	 * Removed in upstream by https://github.com/microsoft/vscode/commit/467f42da9125b42081e50cb9e63c46ebbaa7d558
+	 */
+	private static final class DecodeMap {
+
+		private int lastAssignedTokenId = 0;
+		private final Map<String /* scope */, Integer[] /* ids */> scopeToTokenIds = new HashMap<>();
+		private final Map<String /* token */, Integer /* id */> tokenToTokenId = new HashMap<>();
+		private final List<String> tokenIdToToken = MoreCollections.asArrayList("element-at-index-zero-is-unused");
+		TMTokenDecodeData prevToken = new TMTokenDecodeData(Collections.emptyList(), Collections.emptyMap());
+
+		private Integer[] getTokenIds(final String scope) {
+			Integer[] tokens = this.scopeToTokenIds.get(scope);
+			if (tokens != null) {
+				return tokens;
+			}
+
+			final String[] tmpTokens = StringUtils.splitToArray(scope, '.');
+			tokens = new @NonNull Integer[tmpTokens.length];
+			for (int i = 0; i < tmpTokens.length; i++) {
+				final String token = tmpTokens[i];
+				tokens[i] = this.tokenToTokenId.computeIfAbsent(token, _token -> {
+					final var tokenId = ++this.lastAssignedTokenId;
+					this.tokenIdToToken.add(_token);
+					return tokenId;
+				});
+			}
+
+			this.scopeToTokenIds.put(scope, tokens);
+			return tokens;
+		}
+
+		String getToken(final Map<Integer, Boolean> tokenMap) {
+			final var result = new StringBuilder();
+			boolean isFirst = true;
+			for (int i = 1; i <= this.lastAssignedTokenId; i++) {
+				if (tokenMap.containsKey(i)) {
+					if (isFirst) {
+						isFirst = false;
+					} else {
+						result.append('.');
+					}
+					result.append(this.tokenIdToToken.get(i));
+				}
+			}
+			return result.toString();
+		}
+	}
+}

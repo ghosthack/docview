@@ -1,0 +1,79 @@
+/*
+ * XmlTreeView. Colors are looked up from -docview-* properties that
+ * XmlTreeView.setTheme(ReaderTheme) defines on the view's root.
+ */
+.docview-xml-tree {
+  -fx-background-color: -docview-background;
+}
+
+.docview-xml-tree-bar {
+  -fx-background-color: -docview-background;
+  -fx-border-color: transparent transparent -docview-divider transparent;
+  -fx-border-width: 0 0 1 0;
+}
+
+.docview-xml-tree-bar .toggle-button {
+  -fx-background-color: -docview-pill-background;
+  -fx-background-radius: 0.25em;
+  -fx-border-color: -docview-pill-border;
+  -fx-border-radius: 0.25em;
+  -fx-text-fill: -docview-header-text;
+  -fx-padding: 0.28em 0.65em;
+}
+
+.docview-xml-tree-bar .toggle-button:hover {
+  -fx-border-color: -docview-muted;
+  -fx-text-fill: -docview-text;
+}
+
+.docview-xml-tree-table,
+.docview-xml-tree-table > .virtual-flow > .clipped-container > .sheet {
+  -fx-background-color: -docview-background;
+  -fx-background-insets: 0;
+  -fx-padding: 0;
+  -fx-focus-color: transparent;
+  -fx-faint-focus-color: transparent;
+}
+
+.docview-xml-tree-table .column-header-background,
+.docview-xml-tree-table .column-header,
+.docview-xml-tree-table .filler {
+  -fx-background-color: -docview-background;
+  -fx-border-color: transparent transparent -docview-divider transparent;
+}
+
+.docview-xml-tree-table .column-header .label {
+  -fx-text-fill: -docview-header-text;
+  -fx-font-size: 0.78em;
+  -fx-font-weight: bold;
+  -fx-alignment: center-left;
+  -fx-padding: 0.45em 0.65em;
+}
+
+.docview-xml-tree-table .tree-table-row-cell {
+  -fx-background-color: -docview-background;
+  -fx-text-fill: -docview-text;
+}
+
+.docview-xml-tree-table .tree-table-row-cell:hover {
+  -fx-background-color: -docview-pill-background;
+}
+
+.docview-xml-tree-table .tree-table-row-cell:selected,
+.docview-xml-tree-table:focused .tree-table-row-cell:selected {
+  -fx-background-color: -docview-selection;
+}
+
+.docview-xml-tree-table .tree-table-cell {
+  -fx-border-color: transparent;
+  -fx-text-fill: -docview-text;
+  -fx-padding: 0.28em 0.6em;
+}
+
+.docview-xml-tree-table .tree-disclosure-node > .arrow {
+  -fx-background-color: -docview-muted;
+}
+
+.docview-xml-tree-table .scroll-bar {
+  -fx-background-color: -docview-background;
+}

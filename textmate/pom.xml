@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.ghosthack</groupId>
+    <artifactId>docview-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+  <artifactId>docview-textmate</artifactId>
+  <name>docview textmate</name>
+  <description>TextMate syntax highlighting for docview: a pure-Java Eclipse TM4E core with bundled grammars, registered through ServiceLoader</description>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+      <comments>docview code and most bundled grammars (see grammars/NOTICE.md)</comments>
+    </license>
+    <license>
+      <name>TextMate Bundle License</name>
+      <url>https://github.com/textmate/markdown.tmbundle</url>
+      <distribution>repo</distribution>
+      <comments>HTML, JavaScript-regexp, Markdown and YAML grammars (see grammars/LICENSE-TEXTMATE-BUNDLES.txt)</comments>
+    </license>
+    <license>
+      <name>Eclipse Public License 2.0</name>
+      <url>https://www.eclipse.org/legal/epl-2.0/</url>
+      <distribution>repo</distribution>
+      <comments>Vendored Eclipse TM4E core, relocated to io.github.ghosthack.docview.textmate.internal.tm4e</comments>
+    </license>
+  </licenses>
+  <dependencies>
+    <dependency>
+      <groupId>io.github.ghosthack</groupId>
+      <artifactId>docview-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>${gson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.jruby.jcodings</groupId>
+      <artifactId>jcodings</artifactId>
+      <version>${jcodings.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.jruby.joni</groupId>
+      <artifactId>joni</artifactId>
+      <version>${joni.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jdt</groupId>
+      <artifactId>org.eclipse.jdt.annotation</artifactId>
+      <version>${jdt-annotations.version}</version>
+      <optional>true</optional>
+    </dependency>
+  </dependencies>
+  <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>${maven.multiModuleProjectDirectory}</directory>
+        <targetPath>META-INF</targetPath>
+        <includes>
+          <include>LICENSE</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/tm4e</directory>
+        <targetPath>META-INF/licenses/tm4e</targetPath>
+        <includes>
+          <include>LICENSE</include>
+          <include>README.md</include>
+        </includes>
+      </resource>
+    </resources>
+    <plugins>
+      <!-- TM4E publishes Eclipse/p2 bundles, not Maven artifacts; its pure-Java
+           core is vendored as a second source root (see src/main/tm4e/README.md). -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.6.1</version>
+        <executions>
+          <execution>
+            <id>add-tm4e-source</id>
+            <phase>generate-sources</phase>
+            <goals><goal>add-source</goal></goals>
+            <configuration>
+              <sources>
+                <source>src/main/tm4e/java</source>
+              </sources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>io.github.ghosthack.docview.textmate</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

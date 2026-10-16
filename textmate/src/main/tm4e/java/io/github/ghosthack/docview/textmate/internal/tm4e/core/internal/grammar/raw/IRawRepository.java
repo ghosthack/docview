@@ -1,0 +1,51 @@
+/**
+ * Copyright (c) 2015-2017 Angelo ZERR.
+ * This program and the accompanying materials are made
+ * available under the terms of the Eclipse Public License 2.0
+ * which is available at https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Initial code from https://github.com/microsoft/vscode-textmate/
+ * Initial copyright Copyright (C) Microsoft Corporation. All rights reserved.
+ * Initial license: MIT
+ *
+ * Contributors:
+ * - Microsoft Corporation: Initial code, written in TypeScript, licensed under MIT license
+ * - Angelo Zerr <angelo.zerr@gmail.com> - translation and adaptation to Java
+ */
+package io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.grammar.raw;
+
+import org.eclipse.jdt.annotation.Nullable;
+import io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.parser.PropertySettable;
+
+/**
+ * @see <a href=
+ *      "https://github.com/microsoft/vscode-textmate/blob/76ab07aecfbd7e959ee4b55de3976f7a3ee95f38/src/rawGrammar.ts#L37">
+ *      github.com/microsoft/vscode-textmate/blob/main/src/rawGrammar.ts</a>
+ */
+public interface IRawRepository {
+
+	static IRawRepository merge(final @Nullable IRawRepository... sources) {
+		final var merged = new RawRepository();
+		for (final var source : sources) {
+			if (source == null)
+				continue;
+			source.putEntries(merged);
+		}
+		return merged;
+	}
+
+	void putEntries(PropertySettable<IRawRule> target);
+
+	@Nullable
+	IRawRule getRule(String name);
+
+	IRawRule getBase();
+
+	IRawRule getSelf();
+
+	void setSelf(IRawRule raw);
+
+	void setBase(IRawRule base);
+}

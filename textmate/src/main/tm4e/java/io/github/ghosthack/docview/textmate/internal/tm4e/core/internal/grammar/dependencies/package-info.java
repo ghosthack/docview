@@ -1,0 +1,11 @@
+/**
+ * Types in this package are modelled after <a href=
+ * "https://github.com/microsoft/vscode-textmate/blob/main/src/grammar/grammarDependencies.ts">
+ * github.com/microsoft/vscode-textmate/blob/main/src/grammar/grammarDependencies.ts</a>
+ */
+@NonNullByDefault({ ARRAY_CONTENTS, PARAMETER, RETURN_TYPE, FIELD, TYPE_BOUND, TYPE_ARGUMENT })
+package io.github.ghosthack.docview.textmate.internal.tm4e.core.internal.grammar.dependencies;
+
+import static org.eclipse.jdt.annotation.DefaultLocation.*;
+
+import org.eclipse.jdt.annotation.NonNullByDefault;
