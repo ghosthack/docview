@@ -71,8 +71,8 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
   # Manual runs only build and sign the Central bundle (never uploaded) so it
-  # can be inspected and validated without publishing. The job gets no Central
-  # credentials, so it cannot upload even if skipping is misconfigured.
+  # can be inspected and validated without publishing. The job only gets
+  # placeholder Central credentials, so it cannot upload anything.
   bundle-dry-run:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -84,6 +84,9 @@ jobs:
           distribution: temurin
           java-version: 21
           cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
       - name: Build Central bundle without publishing
@@ -96,6 +99,8 @@ jobs:
           unzip -Z -v target/central-publishing/central-bundle.zip | grep -E '^(Central directory entry|  file system or operating system of origin|  version of encoding software|  minimum software version|  general purpose bit flag|  compression method|  file name|There is)' || true
           unzip -l target/central-publishing/central-bundle.zip
         env:
+          MAVEN_CENTRAL_USERNAME: dry-run
+          MAVEN_CENTRAL_PASSWORD: dry-run
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       - uses: actions/upload-artifact@v4
         with:
