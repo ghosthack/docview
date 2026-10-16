@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version to build the dry-run bundle as (not committed)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -29,7 +34,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          VERSION="$(mvn -q -N help:evaluate -Dexpression=project.version -DforceStdout)"
+          VERSION="$(./mvnw -q -N help:evaluate -Dexpression=project.version -DforceStdout)"
           if [[ "$VERSION" == *-SNAPSHOT ]]; then
             echo "::error::Cannot release snapshot version $VERSION"
             exit 1
@@ -64,7 +69,7 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
       - name: Deploy to Maven Central
-        run: mvn -B clean deploy -P release -DskipTests
+        run: ./mvnw -B clean deploy -P release -DskipTests
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
@@ -91,14 +96,18 @@ jobs:
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
       - name: Build Central bundle without publishing
         run: |
-          mvn -v
+          ./mvnw -v
+          if [[ -n "$DRY_RUN_VERSION" ]]; then
+            ./mvnw -B -q versions:set -DnewVersion="$DRY_RUN_VERSION" -DgenerateBackupPoms=false
+          fi
           # skipPublishing would also skip bundling, so let the upload fail
           # against an unreachable URL instead and keep the bundle it built.
-          mvn -B clean deploy -P release -DskipTests -DcentralBaseUrl=http://127.0.0.1:9 || true
+          ./mvnw -B clean deploy -P release -DskipTests -DcentralBaseUrl=http://127.0.0.1:9 || true
           test -f target/central-publishing/central-bundle.zip
           unzip -Z -v target/central-publishing/central-bundle.zip | grep -E '^(Central directory entry|  file system or operating system of origin|  version of encoding software|  minimum software version|  general purpose bit flag|  compression method|  file name|There is)' || true
           unzip -l target/central-publishing/central-bundle.zip
         env:
+          DRY_RUN_VERSION: ${{ inputs.version }}
           MAVEN_CENTRAL_USERNAME: dry-run
           MAVEN_CENTRAL_PASSWORD: dry-run
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
