@@ -9,12 +9,14 @@ import org.joni.Matcher;
 import org.joni.Option;
 
 /**
- * Hard per-line deadline for TextMate tokenizing. A single Joni regex search
- * cannot otherwise be stopped, and some grammar patterns are super-linear on
- * hostile input. Work run through {@link #within} has a deadline; every regex
- * search checks it on entry, and a watchdog thread interrupts the running
- * matcher (via {@link Matcher#interrupt()}, never a thread interrupt) once it
- * passes. Expiry surfaces as {@link Expired}.
+ * Hard per-line limit on regex search time for TextMate tokenizing. A single
+ * Joni search cannot otherwise be stopped, and some grammar patterns are
+ * super-linear on hostile input. Within {@link #within}, only time spent
+ * inside regex searches counts, so one-time grammar compilation on a cold
+ * start never uses up a line's limit. Every search checks the accumulated
+ * time on entry, and a watchdog thread interrupts a search that runs past it
+ * (via {@link Matcher#interrupt()}, never a thread interrupt). Expiry
+ * surfaces as {@link Expired}.
  *
  * <p>Internal to docview-textmate; not API.
  */
@@ -34,17 +36,21 @@ public final class LineDeadline {
     private static final Set<LineDeadline> ACTIVE = ConcurrentHashMap.newKeySet();
     private static volatile Thread watchdog;
 
-    private final long endNanos;
+    private final long limitNanos;
+    /** Search time already used on this line; written by the owning thread. */
+    private volatile long searchedNanos;
+    /** Start of the search in progress, 0 when none. */
+    private volatile long runningSince;
     private volatile Matcher running;
     private volatile boolean expired;
 
-    private LineDeadline(long endNanos) {
-        this.endNanos = endNanos;
+    private LineDeadline(long limitNanos) {
+        this.limitNanos = limitNanos;
     }
 
     /** Runs {@code action} on this thread with a deadline of {@code limit}. */
     public static <T> T within(Duration limit, Supplier<T> action) {
-        var deadline = new LineDeadline(System.nanoTime() + limit.toNanos());
+        var deadline = new LineDeadline(limit.toNanos());
         LineDeadline outer = CURRENT.get();
         CURRENT.set(deadline);
         ACTIVE.add(deadline);
@@ -62,10 +68,12 @@ public final class LineDeadline {
     public static int search(Matcher matcher, int start, int end) {
         LineDeadline deadline = CURRENT.get();
         if (deadline == null) return matcher.search(start, end, Option.DEFAULT);
-        if (deadline.expired || System.nanoTime() >= deadline.endNanos) {
+        if (deadline.expired || deadline.searchedNanos >= deadline.limitNanos) {
             deadline.expired = true;
             throw new Expired();
         }
+        long started = System.nanoTime();
+        deadline.runningSince = started;
         deadline.running = matcher;
         try {
             // Re-check after publishing the matcher: the watchdog sets
@@ -76,6 +84,8 @@ public final class LineDeadline {
             throw new Expired();
         } finally {
             deadline.running = null;
+            deadline.runningSince = 0;
+            deadline.searchedNanos += System.nanoTime() - started;
         }
     }
 
@@ -99,10 +109,12 @@ public final class LineDeadline {
             }
             long now = System.nanoTime();
             for (LineDeadline deadline : ACTIVE) {
-                if (now < deadline.endNanos) continue;
-                deadline.expired = true;
                 Matcher matcher = deadline.running;
-                if (matcher != null) matcher.interrupt();
+                long since = deadline.runningSince;
+                if (matcher == null || since == 0) continue;
+                if (deadline.searchedNanos + (now - since) < deadline.limitNanos) continue;
+                deadline.expired = true;
+                matcher.interrupt();
             }
         }
     }

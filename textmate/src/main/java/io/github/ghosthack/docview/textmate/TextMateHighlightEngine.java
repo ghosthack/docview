@@ -49,8 +49,8 @@ public final class TextMateHighlightEngine implements HighlightEngine {
      */
     static final int MAX_LINE_LENGTH = 2_000;
     /**
-     * Hard limit for one line: past it the running regex search is
-     * interrupted and the line renders plain.
+     * Hard limit on regex search time for one line (compilation excluded):
+     * past it the running search is interrupted and the line renders plain.
      */
     static final Duration LINE_HARD_LIMIT = Duration.ofMillis(100);
     /** Total tokenizing time per session (code block or document). */
