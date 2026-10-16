@@ -89,7 +89,10 @@ jobs:
       - name: Build Central bundle without publishing
         run: |
           mvn -v
-          mvn -B clean deploy -P release -DskipTests -DskipPublishing=true
+          # skipPublishing would also skip bundling, so let the upload fail
+          # against an unreachable URL instead and keep the bundle it built.
+          mvn -B clean deploy -P release -DskipTests -DcentralBaseUrl=http://127.0.0.1:9 || true
+          test -f target/central-publishing/central-bundle.zip
           unzip -Z -v target/central-publishing/central-bundle.zip | grep -E '^(Central directory entry|  file system or operating system of origin|  version of encoding software|  minimum software version|  general purpose bit flag|  compression method|  file name|There is)' || true
           unzip -l target/central-publishing/central-bundle.zip
         env:
