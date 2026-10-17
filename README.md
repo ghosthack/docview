@@ -22,13 +22,13 @@ application supplies its own JavaFX 21 or newer.
 <dependency>
   <groupId>io.github.ghosthack</groupId>
   <artifactId>docview-fx</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 <!-- Optional: TextMate highlighting for code blocks -->
 <dependency>
   <groupId>io.github.ghosthack</groupId>
   <artifactId>docview-textmate</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
