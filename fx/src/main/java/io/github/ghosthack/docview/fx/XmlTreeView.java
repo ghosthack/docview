@@ -95,7 +95,9 @@ public final class XmlTreeView {
     private double em = 15;
     private Runnable onDoubleClick;
 
-    private record Remembered(XmlTree.Tree tree, XmlItem root, int firstRow) {
+    /** {@code contracted}: the global toggle when {@code root} was last shown. */
+    private record Remembered(XmlTree.Tree tree, XmlItem root, int firstRow,
+                              boolean contracted) {
     }
 
     public XmlTreeView() {
@@ -225,11 +227,14 @@ public final class XmlTreeView {
         root.getTop().setVisible(true);
         root.getTop().setManaged(true);
         Remembered state = remembered.get(documentPath);
-        XmlItem item = state != null && state.tree() == next ? state.root() : new XmlItem(next.root());
+        boolean restored = state != null && state.tree() == next;
+        XmlItem item = restored ? state.root() : new XmlItem(next.root());
+        // The global toggle may have changed while another document was shown.
+        if (restored && state.contracted() != contractLeaves.isSelected()) item.refreshTree();
         table.setRoot(item);
         layoutColumns();
         table.getSelectionModel().clearSelection();
-        table.scrollTo(state != null && state.tree() == next ? state.firstRow() : 0);
+        table.scrollTo(restored ? state.firstRow() : 0);
         table.refresh();
     }
 
@@ -252,7 +257,8 @@ public final class XmlTreeView {
 
     public void rememberPosition() {
         if (path != null && tree != null && table.getRoot() instanceof XmlItem item) {
-            remembered.put(path, new Remembered(tree, item, firstVisibleRow()));
+            remembered.put(path, new Remembered(tree, item, firstVisibleRow(),
+                    contractLeaves.isSelected()));
         }
     }
 
@@ -262,6 +268,10 @@ public final class XmlTreeView {
         path = null;
         tree = null;
         table.setRoot(null);
+        // Drop a parse-error panel and its source along with the document.
+        root.setCenter(table);
+        root.getTop().setVisible(true);
+        root.getTop().setManaged(true);
     }
 
     /** Selected rows as "tag\tvalue" lines; contracted leaves as "key: value; …". */

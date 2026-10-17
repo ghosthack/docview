@@ -11,18 +11,18 @@ import java.nio.file.Path;
 public final class PageCache extends BackgroundCache<PageCache.Key, String> {
 
     /**
-     * Everything a page's HTML depends on. The text length and hash keep two
-     * in-memory versions of one path (same size, no modification time) apart.
+     * Everything a page's HTML depends on. The text's SHA-256 keeps two
+     * in-memory versions of one path (same size, no modification time) apart
+     * without the key pinning the text, which the page budget does not count.
      */
-    public record Key(Path path, long size, long modified, int textLength, int textHash,
+    public record Key(Path path, long size, long modified, String textSha256,
                       DocumentKind kind, ReaderStyle style, String highlightEngine) {
 
         public static Key of(DocumentContent document, ReaderStyle style,
                              String highlightEngine) {
             return new Key(document.path(), document.size(),
-                    document.lastModifiedMillis(), document.text().length(),
-                    document.text().hashCode(), document.kind(), style,
-                    highlightEngine);
+                    document.lastModifiedMillis(), textDigest(document.text()),
+                    document.kind(), style, highlightEngine);
         }
     }
 

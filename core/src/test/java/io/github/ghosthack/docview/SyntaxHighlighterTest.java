@@ -1,10 +1,12 @@
 package io.github.ghosthack.docview;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
 
@@ -307,6 +309,90 @@ class SyntaxHighlighterTest {
         assertTrue(segments.stream().anyMatch(segment ->
                 segment.style() == SyntaxHighlighter.Style.STRING
                         && segment.text().equals("\"# text\"")));
+    }
+
+    @Test
+    void keywordsAfterOtherIdentifiersAreHighlighted() {
+        var java = SyntaxHighlighter.highlightLine(
+                "foo return x = new Foo()", DocumentKind.JAVA, true);
+        assertTrue(java.stream().anyMatch(segment ->
+                segment.style() == SyntaxHighlighter.Style.KEYWORD
+                        && segment.text().equals("return")));
+        assertTrue(java.stream().anyMatch(segment ->
+                segment.style() == SyntaxHighlighter.Style.KEYWORD
+                        && segment.text().equals("new")));
+        assertTrue(java.stream().noneMatch(segment ->
+                segment.style() == SyntaxHighlighter.Style.KEYWORD
+                        && segment.text().contains("Foo")));
+
+        var script = SyntaxHighlighter.highlightLine(
+                "int y = foo if 1", DocumentKind.SCRIPT, true);
+        assertTrue(script.stream().anyMatch(segment ->
+                segment.style() == SyntaxHighlighter.Style.KEYWORD
+                        && segment.text().equals("if")));
+        assertTrue(script.stream().anyMatch(segment ->
+                segment.style() == SyntaxHighlighter.Style.NUMBER
+                        && segment.text().equals("1")));
+    }
+
+    @Test
+    void xmlTagEndsOnlyCloseAnOpenTag() {
+        String line = "a > b <c d=\"1\"/> e > f <g>";
+        var segments = SyntaxHighlighter.highlightLine(
+                line, DocumentKind.XML, true);
+
+        assertEquals(java.util.List.of(
+                new SyntaxHighlighter.Segment("a > b ", SyntaxHighlighter.Style.PLAIN),
+                new SyntaxHighlighter.Segment("<c", SyntaxHighlighter.Style.TAG),
+                new SyntaxHighlighter.Segment(" ", SyntaxHighlighter.Style.PLAIN),
+                new SyntaxHighlighter.Segment("d", SyntaxHighlighter.Style.KEY),
+                new SyntaxHighlighter.Segment("=", SyntaxHighlighter.Style.PLAIN),
+                new SyntaxHighlighter.Segment("\"1\"", SyntaxHighlighter.Style.STRING),
+                new SyntaxHighlighter.Segment("/>", SyntaxHighlighter.Style.TAG),
+                new SyntaxHighlighter.Segment(" e > f ", SyntaxHighlighter.Style.PLAIN),
+                new SyntaxHighlighter.Segment("<g>", SyntaxHighlighter.Style.TAG)),
+                segments);
+    }
+
+    @Test
+    void hostileLinesHighlightInBoundedTime() {
+        int length = SyntaxHighlighter.MAX_LINE_LENGTH - 8;
+        var hostile = java.util.List.of(
+                // An unclosed tag used to re-run an 8 Ki lookbehind at every
+                // position for every token: tens of seconds per line.
+                ("<a " + "b=1 ".repeat(length / 4)).substring(0, length),
+                // Every rule was re-run from the cursor for every token.
+                "1,".repeat(length / 2),
+                "1".repeat(length - 1) + "x",
+                "[".repeat(length / 2) + "](".repeat(length / 4));
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            for (String line : hostile) {
+                for (DocumentKind kind : DocumentKind.values()) {
+                    var segments = SyntaxHighlighter.highlightLine(
+                            line, kind, true);
+                    assertEquals(line, segments.stream()
+                            .map(SyntaxHighlighter.Segment::text)
+                            .collect(java.util.stream.Collectors.joining()));
+                }
+            }
+        });
+
+        var tag = SyntaxHighlighter.highlightLine(
+                hostile.getFirst(), DocumentKind.XML, true);
+        assertEquals(new SyntaxHighlighter.Segment(
+                "<a", SyntaxHighlighter.Style.TAG), tag.getFirst());
+        assertTrue(tag.stream().anyMatch(segment ->
+                segment.style() == SyntaxHighlighter.Style.KEY));
+    }
+
+    @Test
+    void linesOverTheLengthCapRenderPlain() {
+        String line = "<a " + "b=1 ".repeat(SyntaxHighlighter.MAX_LINE_LENGTH / 4);
+        var segments = SyntaxHighlighter.highlightLine(
+                line, DocumentKind.XML, true);
+
+        assertEquals(java.util.List.of(new SyntaxHighlighter.Segment(
+                line, SyntaxHighlighter.Style.PLAIN)), segments);
     }
 
     private static DocumentContent content(DocumentKind kind, String text) {

@@ -46,6 +46,13 @@ public final class SafeMarkupRenderer {
     static final int MAX_FALLBACK_CHARS = 1024 * 1024;
     /** Deepest list nesting; deeper items attach at this depth. */
     static final int MAX_LIST_DEPTH = 32;
+    /** Widest Markdown table; a wider header row is not read as a table. */
+    static final int MAX_TABLE_COLUMNS = 128;
+    /**
+     * Deepest element stack handed to Swing's HTML parser, whose recovery
+     * scans that stack for each misplaced tag; deeper HTML renders as source.
+     */
+    static final int MAX_HTML_DEPTH = 256;
     static final double XML_TREE_INDENT_EM = 1.84;
     static final double XML_MIN_TAG_COLUMN_EM = 16.0;
     private static final double XML_MIN_VALUE_COLUMN_EM = 28.0;
@@ -121,11 +128,14 @@ public final class SafeMarkupRenderer {
     /** Builds a read-only, expandable element tree without resolving external XML content. */
     /**
      * Parses well-formed XML into its root element with external entities,
-     * DTDs, schemas and XInclude disabled. Shared by the WebView and native
+     * external DTDs, schemas and XInclude disabled. Internal DTD entities are
+     * expanded within explicit entity limits. Shared by the WebView and native
      * XML tree Readers so both stay equally locked down.
      */
     static Element parseXmlRoot(String xml)
             throws ParserConfigurationException, SAXException, IOException {
+        // A decoded file keeps its BOM, which a character stream treats as content.
+        if (!xml.isEmpty() && xml.charAt(0) == '\uFEFF') xml = xml.substring(1);
         if (xml.length() > MAX_XML_TREE_CHARS) {
             throw new IllegalArgumentException(String.format(Locale.ROOT,
                     "The document is too large for the XML tree (%.1f MiB; limit %d MiB).",
@@ -134,7 +144,8 @@ public final class SafeMarkupRenderer {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
         factory.setXIncludeAware(false);
-        factory.setExpandEntityReferences(false);
+        // Expanded so internal entity text and elements reach the tree.
+        factory.setExpandEntityReferences(true);
         factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
         factory.setFeature(
                 "http://xml.org/sax/features/external-general-entities", false);
@@ -144,6 +155,18 @@ public final class SafeMarkupRenderer {
                 "http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        // Explicit limits, so the result does not depend on the running JDK's
+        // defaults. Depth is left to the tree (MAX_XML_TREE_DEPTH) and the input
+        // cap; entity expansion may not grow past what the input cap allows.
+        factory.setAttribute("jdk.xml.maxElementDepth", "0");
+        factory.setAttribute("jdk.xml.elementAttributeLimit", "10000");
+        factory.setAttribute("jdk.xml.entityExpansionLimit", "64000");
+        factory.setAttribute("jdk.xml.entityReplacementLimit", "3000000");
+        factory.setAttribute("jdk.xml.totalEntitySizeLimit",
+                Integer.toString(MAX_XML_TREE_CHARS));
+        factory.setAttribute("jdk.xml.maxGeneralEntitySizeLimit",
+                Integer.toString(MAX_XML_TREE_CHARS));
+        factory.setAttribute("jdk.xml.maxParameterEntitySizeLimit", "1000000");
 
         var builder = factory.newDocumentBuilder();
         builder.setErrorHandler(new ErrorHandler() {
@@ -495,13 +518,8 @@ public final class SafeMarkupRenderer {
             }
             TableHeader table = tableHeader(lines, lineIndex);
             if (table != null) {
-                List<List<String>> rows = new ArrayList<>();
-                int rowIndex = lineIndex + 2;
-                while (rowIndex < lines.length && isTableBodyRow(lines[rowIndex])) {
-                    rows.add(normalizeCells(
-                            tableCells(lines[rowIndex]), table.cells().size()));
-                    rowIndex++;
-                }
+                TableBody body = tableBody(lines, lineIndex, table.cells().size());
+                List<List<String>> rows = body.rows();
 
                 out.append("<table class=\"markdown-table\"><colgroup>");
                 appendTableColumns(out, table.cells(), rows);
@@ -515,7 +533,7 @@ public final class SafeMarkupRenderer {
                     out.append("</tr>");
                 }
                 out.append("</tbody></table>");
-                lineIndex = rowIndex - 1;
+                lineIndex = body.lastLine();
                 continue;
             }
             String trimmed = line.strip();
@@ -616,7 +634,9 @@ public final class SafeMarkupRenderer {
                         ? listMarker(lines[nextLine]) : null;
                 if (nextMarker != null
                         && nextMarker.indent() >= first.indent()) {
-                    lastLine = lineIndex;
+                    // Skip the whole blank run so each blank is scanned once.
+                    lastLine = nextLine - 1;
+                    lineIndex = nextLine - 1;
                     continue;
                 }
                 break;
@@ -909,7 +929,8 @@ public final class SafeMarkupRenderer {
         }
         List<String> cells = tableCells(lines[lineIndex]);
         List<String> delimiters = tableCells(lines[lineIndex + 1]);
-        if (cells.isEmpty() || cells.size() != delimiters.size()) {
+        if (cells.isEmpty() || cells.size() != delimiters.size()
+                || cells.size() > MAX_TABLE_COLUMNS) {
             return null;
         }
         List<TableAlignment> alignments = new ArrayList<>(delimiters.size());
@@ -923,6 +944,30 @@ public final class SafeMarkupRenderer {
                     : (value.endsWith(":") ? TableAlignment.RIGHT : TableAlignment.NONE));
         }
         return new TableHeader(cells, alignments);
+    }
+
+    /**
+     * Collects the body rows below the table header at {@code headerLine},
+     * padded to {@code columns}. The empty cells added to short rows may not
+     * outnumber the characters of the table's source so far; a row that
+     * would exceed that ends the table, so a wide header over many
+     * near-empty rows stays linear instead of growing as rows x columns.
+     */
+    static TableBody tableBody(String[] lines, int headerLine, int columns) {
+        List<List<String>> rows = new ArrayList<>();
+        long source = lines[headerLine].length() + lines[headerLine + 1].length() + 2L;
+        long padding = 0;
+        int rowIndex = headerLine + 2;
+        while (rowIndex < lines.length && isTableBodyRow(lines[rowIndex])) {
+            List<String> cells = tableCells(lines[rowIndex]);
+            int missing = Math.max(0, columns - cells.size());
+            source += lines[rowIndex].length() + 1;
+            if (padding + missing > source) break;
+            padding += missing;
+            rows.add(normalizeCells(cells, columns));
+            rowIndex++;
+        }
+        return new TableBody(rows, rowIndex - 1);
     }
 
     static boolean isTableBodyRow(String line) {
@@ -1073,15 +1118,19 @@ public final class SafeMarkupRenderer {
     static String htmlBody(String html) {
         String sanitized = stripSuppressedRawTextElements(html);
         var out = new StringBuilder(sanitized.length());
+        var input = new StoppableReader(sanitized);
         try {
-            new ParserDelegator().parse(new StringReader(sanitized),
+            new ParserDelegator().parse(input,
                     new HTMLEditorKit.ParserCallback() {
-                        private final ArrayDeque<HTML.Tag> opened = new ArrayDeque<>();
+                        /** The parser's open elements, implied ones included. */
+                        private int depth;
                         private int suppressedDepth;
                         private boolean previousEndedSpan;
 
                         @Override
                         public void handleStartTag(HTML.Tag tag, MutableAttributeSet attrs, int pos) {
+                            if (++depth > MAX_HTML_DEPTH) input.stop();
+                            if (input.stopped()) return;
                             if (SUPPRESSED.contains(tag)) {
                                 suppressedDepth++;
                                 return;
@@ -1105,11 +1154,12 @@ public final class SafeMarkupRenderer {
                                         .append(tag.toString().toLowerCase(Locale.ROOT))
                                         .append('>');
                             }
-                            opened.push(tag);
                         }
 
                         @Override
                         public void handleEndTag(HTML.Tag tag, int pos) {
+                            depth--;
+                            if (input.stopped()) return;
                             if (SUPPRESSED.contains(tag)) {
                                 if (suppressedDepth > 0) suppressedDepth--;
                                 return;
@@ -1122,12 +1172,12 @@ public final class SafeMarkupRenderer {
                                         .append(tag.toString().toLowerCase(Locale.ROOT))
                                         .append('>');
                             }
-                            opened.removeFirstOccurrence(tag);
                             previousEndedSpan = tag == HTML.Tag.SPAN;
                         }
 
                         @Override
                         public void handleSimpleTag(HTML.Tag tag, MutableAttributeSet attrs, int pos) {
+                            if (input.stopped()) return;
                             if (suppressedDepth == 0 && ALLOWED.contains(tag)) {
                                 out.append('<').append(tag.toString().toLowerCase(Locale.ROOT))
                                         .append('>');
@@ -1137,7 +1187,7 @@ public final class SafeMarkupRenderer {
 
                         @Override
                         public void handleText(char[] data, int pos) {
-                            if (suppressedDepth == 0) {
+                            if (suppressedDepth == 0 && !input.stopped()) {
                                 out.append(escape(new String(data)));
                                 previousEndedSpan = false;
                             }
@@ -1152,7 +1202,41 @@ public final class SafeMarkupRenderer {
         } catch (IOException impossibleForStringReader) {
             return "<pre class=\"plain\">" + escape(html) + "</pre>";
         }
+        if (input.stopped()) {
+            return "<pre class=\"plain\">" + escape(html) + "</pre>";
+        }
         return out.toString();
+    }
+
+    /**
+     * Source for Swing's HTML parser that can end the input early. The parser
+     * reads ahead at most a small buffer, so stopping bounds the rest of the
+     * parse without throwing through its error recovery.
+     */
+    static final class StoppableReader extends StringReader {
+        private boolean stopped;
+
+        StoppableReader(String text) {
+            super(text);
+        }
+
+        void stop() {
+            stopped = true;
+        }
+
+        boolean stopped() {
+            return stopped;
+        }
+
+        @Override
+        public int read() throws IOException {
+            return stopped ? -1 : super.read();
+        }
+
+        @Override
+        public int read(char[] buffer, int offset, int length) throws IOException {
+            return stopped ? -1 : super.read(buffer, offset, length);
+        }
     }
 
     /**
@@ -1847,6 +1931,9 @@ public final class SafeMarkupRenderer {
     }
 
     record TableHeader(List<String> cells, List<TableAlignment> alignments) {
+    }
+
+    record TableBody(List<List<String>> rows, int lastLine) {
     }
 
     record InlineBlock(String html, int lastLine) {

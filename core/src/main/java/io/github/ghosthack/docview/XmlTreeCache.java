@@ -8,11 +8,15 @@ import java.nio.file.Path;
  */
 public final class XmlTreeCache extends BackgroundCache<XmlTreeCache.Key, XmlTree.Tree> {
 
-    public record Key(Path path, long size, long modified, int textLength, int textHash) {
+    /**
+     * The text's SHA-256 keeps two in-memory versions of one path apart
+     * without the key pinning the text, which the node budget does not count.
+     */
+    public record Key(Path path, long size, long modified, String textSha256) {
 
         public static Key of(DocumentContent document) {
             return new Key(document.path(), document.size(), document.lastModifiedMillis(),
-                    document.text().length(), document.text().hashCode());
+                    textDigest(document.text()));
         }
     }
 

@@ -14,7 +14,6 @@ import io.github.ghosthack.docview.Blocks.TableRow;
 import io.github.ghosthack.docview.SafeMarkupRenderer.TableAlignment;
 
 import java.io.IOException;
-import java.io.StringReader;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -38,12 +37,20 @@ final class HtmlBlockParser {
     }
 
     static Model parse(String html) {
-        var builder = new Builder();
+        var input = new SafeMarkupRenderer.StoppableReader(
+                SafeMarkupRenderer.stripSuppressedRawTextElements(html));
+        var builder = new Builder(input);
         try {
-            new ParserDelegator().parse(new StringReader(
-                    SafeMarkupRenderer.stripSuppressedRawTextElements(html)), builder, true);
+            new ParserDelegator().parse(input, builder, true);
         } catch (IOException impossibleForStringReader) {
             // StringReader does not throw.
+        }
+        if (input.stopped()) {
+            // Too deeply nested for Swing's parser to recover in linear time;
+            // show the source as plain lines, like the WebView page does.
+            builder = new Builder(input);
+            builder.pre = new StringBuilder(html);
+            builder.flushPre();
         }
         builder.finish();
         return new Model(List.copyOf(builder.rows), List.copyOf(builder.codeBlocks));
@@ -76,9 +83,18 @@ final class HtmlBlockParser {
         private boolean rowHasHeader;
         /** Tables opened inside an open table; their text joins the outer cell. */
         private int nestedTables;
+        private final SafeMarkupRenderer.StoppableReader input;
+        /** The parser's open elements, implied ones included. */
+        private int depth;
+
+        Builder(SafeMarkupRenderer.StoppableReader input) {
+            this.input = input;
+        }
 
         @Override
         public void handleStartTag(HTML.Tag tag, MutableAttributeSet attrs, int pos) {
+            if (++depth > SafeMarkupRenderer.MAX_HTML_DEPTH) input.stop();
+            if (input.stopped()) return;
             if (SafeMarkupRenderer.SUPPRESSED.contains(tag)) {
                 suppressedDepth++;
                 return;
@@ -97,7 +113,8 @@ final class HtmlBlockParser {
             if (tag == HTML.Tag.H1 || tag == HTML.Tag.H2 || tag == HTML.Tag.H3
                     || tag == HTML.Tag.H4 || tag == HTML.Tag.H5 || tag == HTML.Tag.H6) {
                 flushBlock();
-                headingLevel = tag.toString().charAt(1) - '0';
+                // A heading in a table cell is plain cell text.
+                if (tableCells == null) headingLevel = tag.toString().charAt(1) - '0';
             } else if (tag == HTML.Tag.P || tag == HTML.Tag.DIV
                     || tag == HTML.Tag.CAPTION) {
                 flushBlock();
@@ -116,8 +133,10 @@ final class HtmlBlockParser {
                 boolean ordered = !lists.isEmpty() && lists.peek();
                 int ordinal = ordinals.isEmpty() ? 1 : ordinals.pop();
                 if (!lists.isEmpty()) ordinals.push(ordinal + 1);
-                listPrefix = ordered ? ordinal + "." : "•";
-                listDepth = Math.max(0, lists.size() - 1);
+                if (tableCells == null) { // a list item in a cell is plain cell text
+                    listPrefix = ordered ? ordinal + "." : "•";
+                    listDepth = Math.max(0, lists.size() - 1);
+                }
             } else if (tag == HTML.Tag.TABLE) {
                 flushBlock();
                 tableRows = new ArrayList<>();
@@ -150,6 +169,8 @@ final class HtmlBlockParser {
 
         @Override
         public void handleEndTag(HTML.Tag tag, int pos) {
+            depth--;
+            if (input.stopped()) return;
             if (SafeMarkupRenderer.SUPPRESSED.contains(tag)) {
                 if (suppressedDepth > 0) suppressedDepth--;
                 return;
@@ -183,9 +204,13 @@ final class HtmlBlockParser {
                 quoteDepth = Math.max(0, quoteDepth - 1);
             } else if (tag == HTML.Tag.UL || tag == HTML.Tag.OL) {
                 flushBlock();
+                if (tableCells == null) listPrefix = null;
                 if (!lists.isEmpty()) lists.pop();
                 if (!ordinals.isEmpty()) ordinals.pop();
                 if (lists.isEmpty()) markListEnd();
+            } else if (tag == HTML.Tag.LI) {
+                flushBlock();
+                if (tableCells == null) listPrefix = null; // even when it had no text
             } else if (tag == HTML.Tag.TH || tag == HTML.Tag.TD) {
                 if (tableCells != null) {
                     flushRun();
@@ -209,6 +234,7 @@ final class HtmlBlockParser {
 
         @Override
         public void handleSimpleTag(HTML.Tag tag, MutableAttributeSet attrs, int pos) {
+            if (input.stopped()) return;
             if (suppressedDepth > 0 || !SafeMarkupRenderer.ALLOWED.contains(tag)) return;
             previousEndedSpan = false;
             if (tag == HTML.Tag.HR) {
@@ -222,7 +248,7 @@ final class HtmlBlockParser {
 
         @Override
         public void handleText(char[] data, int pos) {
-            if (suppressedDepth > 0) return;
+            if (suppressedDepth > 0 || input.stopped()) return;
             previousEndedSpan = false;
             String value = new String(data);
             if (pre != null) {
@@ -251,24 +277,37 @@ final class HtmlBlockParser {
             text.setLength(0);
         }
 
-        /** Ends the pending inline text as a heading, list item or paragraph. */
+        /**
+         * Ends the pending inline text as a list item, heading or paragraph. An
+         * open {@code li} keeps its bullet until it has text, so blocks nested
+         * in it ({@code <li><p>..</p></li>}) still become list items.
+         */
         private void flushBlock() {
             flushRun();
-            if (tableCells != null) return; // a cell collects runs until it closes
+            if (tableCells != null) {
+                // A cell collects runs until it closes; its block children
+                // are separated by a space so their words do not run together.
+                String last = runs.isEmpty() ? "" : runs.getLast().text();
+                if (!last.isEmpty()
+                        && !Character.isWhitespace(last.charAt(last.length() - 1))) {
+                    text.append(' ');
+                }
+                return;
+            }
             List<Run> block = trimRuns(List.copyOf(runs));
             runs.clear();
             if (!block.isEmpty()) {
-                if (headingLevel > 0) {
-                    rows.add(new Heading(headingLevel, block, null, quoteDepth));
-                } else if (listPrefix != null) {
+                if (listPrefix != null) {
                     rows.add(new ListItem(listDepth, "", listPrefix, false, false, false,
                             block, false, quoteDepth));
+                } else if (headingLevel > 0) {
+                    rows.add(new Heading(headingLevel, block, null, quoteDepth));
                 } else {
                     rows.add(new Paragraph(block, quoteDepth));
                 }
+                listPrefix = null;
             }
             headingLevel = 0;
-            listPrefix = null;
         }
 
         /** Gives the last item of a top-level list its trailing spacing. */
@@ -294,6 +333,7 @@ final class HtmlBlockParser {
             }
             flushRun();
             runs.clear();
+            listPrefix = null; // code lines have no bullet; later text is no item
             if (body.startsWith("\n")) body = body.substring(1);
             if (body.endsWith("\n")) body = body.substring(0, body.length() - 1);
             String[] lines = body.split("\\R", -1);

@@ -1,12 +1,17 @@
 package io.github.ghosthack.docview;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -23,6 +28,9 @@ import java.util.function.ToLongFunction;
  * that build. Prefetches run one at a time at minimum priority and are skipped
  * once {@link #newGeneration} marks them stale (the user has moved on).
  * Evicted values are handed to the {@code evicted} callback.
+ *
+ * <p>After {@link #close} every pending and later future is cancelled, and a
+ * build that was already running hands its value to {@code evicted}.
  */
 public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
         permits PageCache, BlockCache, XmlTreeCache {
@@ -53,6 +61,7 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
     private final Map<K, CompletableFuture<V>> building = new HashMap<>();
     private final AtomicLong generation = new AtomicLong();
     private long cachedWeight;
+    private boolean closed;
 
     /**
      * Returns the value for {@code key}: already completed when cached,
@@ -61,6 +70,7 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
     public CompletableFuture<V> request(K key, DocumentContent document) {
         CompletableFuture<V> future;
         synchronized (this) {
+            if (closed) return cancelled();
             V cached = cache.get(key);
             if (cached != null) return CompletableFuture.completedFuture(cached);
             CompletableFuture<V> inFlight = building.get(key);
@@ -68,7 +78,14 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
             future = new CompletableFuture<>();
             building.put(key, future);
         }
-        current.execute(() -> build(key, document, future));
+        try {
+            current.execute(() -> build(key, document, future));
+        } catch (RejectedExecutionException closing) {
+            synchronized (this) {
+                building.remove(key, future);
+            }
+            future.cancel(false);
+        }
         return future;
     }
 
@@ -80,13 +97,14 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
     public CompletableFuture<V> prefetch(K key, DocumentContent document) {
         long scheduled = generation.get();
         synchronized (this) {
+            if (closed) return cancelled();
             V cached = cache.get(key);
             if (cached != null) return CompletableFuture.completedFuture(cached);
             CompletableFuture<V> inFlight = building.get(key);
             if (inFlight != null) return inFlight;
         }
         var result = new CompletableFuture<V>();
-        prefetch.execute(() -> {
+        Runnable task = () -> {
             if (scheduled != generation.get()) {
                 result.complete(null);
                 return;
@@ -94,6 +112,10 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
             CompletableFuture<V> future;
             boolean owner = false;
             synchronized (this) {
+                if (closed) {
+                    result.cancel(false);
+                    return;
+                }
                 V cached = cache.get(key);
                 future = cached != null ? CompletableFuture.completedFuture(cached)
                         : building.get(key);
@@ -105,8 +127,27 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
             }
             future.whenComplete((value, error) -> forward(value, error, result));
             if (owner) build(key, document, future);
-        });
+        };
+        try {
+            prefetch.execute(new PrefetchTask(task, result));
+        } catch (RejectedExecutionException closing) {
+            result.cancel(false);
+        }
         return result;
+    }
+
+    /** A queued prefetch, so {@link #close} can cancel the ones it drops. */
+    private record PrefetchTask(Runnable task, CompletableFuture<?> result)
+            implements Runnable {
+        @Override public void run() {
+            task.run();
+        }
+    }
+
+    private static <V> CompletableFuture<V> cancelled() {
+        var future = new CompletableFuture<V>();
+        future.cancel(false);
+        return future;
     }
 
     private static <V> void forward(V value, Throwable error,
@@ -126,18 +167,26 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
 
     private void build(K key, DocumentContent document,
                        CompletableFuture<V> future) {
+        boolean wasClosed;
         try {
             V value = builder.apply(key, document);
             synchronized (this) {
-                store(key, value);
-                building.remove(key);
+                // A build that outlived close() must not refill the cache.
+                wasClosed = closed;
+                if (wasClosed) evicted.accept(value);
+                else store(key, value);
+                building.remove(key, future);
             }
-            future.complete(value);
+            // Never hand out a value that was already passed to evicted.
+            if (wasClosed) future.cancel(false);
+            else future.complete(value);
         } catch (Throwable error) {
             synchronized (this) {
-                building.remove(key);
+                wasClosed = closed;
+                building.remove(key, future);
             }
-            future.completeExceptionally(error);
+            if (wasClosed) future.cancel(false);
+            else future.completeExceptionally(error);
         }
     }
 
@@ -163,13 +212,46 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
 
     @Override
     public void close() {
-        current.shutdownNow();
-        prefetch.shutdownNow();
+        List<CompletableFuture<V>> pending;
         synchronized (this) {
+            closed = true;
+            pending = List.copyOf(building.values());
+            building.clear();
             cache.values().forEach(evicted);
             cache.clear();
             cachedWeight = 0;
         }
+        current.shutdownNow();
+        for (Runnable dropped : prefetch.shutdownNow()) {
+            if (dropped instanceof PrefetchTask task) task.result().cancel(false);
+        }
+        // Dropped and running builds never complete these on their own.
+        pending.forEach(future -> future.cancel(false));
+    }
+
+    /**
+     * SHA-256 of {@code text}'s UTF-16 code units as hex, for cache keys: equal
+     * for equal text without the key retaining the text itself.
+     */
+    static String textDigest(String text) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException missing) {
+            throw new IllegalStateException(missing);
+        }
+        byte[] chunk = new byte[16 * 1024];
+        for (int start = 0; start < text.length(); ) {
+            int end = Math.min(text.length(), start + chunk.length / 2);
+            for (int i = start, j = 0; i < end; i++) {
+                char c = text.charAt(i);
+                chunk[j++] = (byte) (c >>> 8);
+                chunk[j++] = (byte) c;
+            }
+            digest.update(chunk, 0, (end - start) * 2);
+            start = end;
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private static java.util.concurrent.ThreadFactory daemon(String name, int priority) {

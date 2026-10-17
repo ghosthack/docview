@@ -2,9 +2,11 @@
 
 ## docview-textmate
 
-- **Eclipse TM4E core** (`org.eclipse.tm4e.*`), vendored from
+- **Eclipse TM4E core**, vendored from
   [eclipse-tm4e/tm4e](https://github.com/eclipse-tm4e/tm4e) at commit
-  `4b15c1b2c1d24b06556065d5006804ab56e9c211`. Eclipse Public License 2.0.
+  `4b15c1b2c1d24b06556065d5006804ab56e9c211` and relocated from
+  `org.eclipse.tm4e.*` to `io.github.ghosthack.docview.textmate.internal.tm4e.*`.
+  Eclipse Public License 2.0.
   Source, license and the list of local changes: `textmate/src/main/tm4e/`
   (also packaged in the jar under `META-INF/licenses/tm4e/`).
 - **TextMate grammars** for CSS, HTML, Java, JavaScript, JSON, Markdown,

@@ -40,8 +40,6 @@ public final class TextMateHighlightEngine implements HighlightEngine {
 
     private static final String RESOURCE_ROOT =
             "/io/github/ghosthack/docview/textmate/grammars/";
-    private static final Duration LINE_TIME_LIMIT =
-            Duration.ofMillis(50);
     /**
      * Longest line handed to TextMate. A single regex search cannot be
      * interrupted, and some grammar patterns are super-linear on hostile
@@ -51,6 +49,8 @@ public final class TextMateHighlightEngine implements HighlightEngine {
     /**
      * Hard limit on regex search time for one line (compilation excluded):
      * past it the running search is interrupted and the line renders plain.
+     * TM4E's own wall-clock limit is not used: it would count lazy grammar
+     * compilation and cut the first lines after a cold start short.
      */
     static final Duration LINE_HARD_LIMIT = Duration.ofMillis(100);
     /** Total tokenizing time per session (code block or document). */
@@ -211,14 +211,18 @@ public final class TextMateHighlightEngine implements HighlightEngine {
                     try {
                         IStateStack stack = ruleStack;
                         result = LineDeadline.within(LINE_HARD_LIMIT,
-                                () -> grammar.tokenizeLine(line, stack, LINE_TIME_LIMIT));
-                    } catch (LineDeadline.Expired expired) {
+                                () -> grammar.tokenizeLine(line, stack, null));
+                    } catch (RuntimeException failed) {
+                        // Expired, or a grammar rule Joni cannot compile
+                        // (TMException); either way move past this line.
                         result = null;
                     } finally {
                         spentNanos += System.nanoTime() - started;
                     }
                 }
-                if (result == null) {
+                if (result == null || result.isStoppedEarly()) {
+                    // Partial tokens and a mid-line rule stack would corrupt
+                    // the following lines.
                     tokens.add(HighlightEngines.plainLine(line));
                     ruleStack = null;
                     continue;

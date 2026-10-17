@@ -13,16 +13,16 @@ public final class BlockCache
         extends BackgroundCache<BlockCache.Key, Blocks.Model> {
 
     /**
-     * Everything a model depends on. The text length and hash keep two
-     * in-memory versions of one path (same size, no modification time) apart.
+     * Everything a model depends on. The text digest keeps two in-memory
+     * versions of one path (same size, no modification time) apart.
      */
-    public record Key(Path path, long size, long modified, int textLength, int textHash,
+    public record Key(Path path, long size, long modified, String textSha256,
                       DocumentKind kind, String highlightEngine) {
 
         public static Key of(DocumentContent document, String highlightEngine) {
             return new Key(document.path(), document.size(),
-                    document.lastModifiedMillis(), document.text().length(),
-                    document.text().hashCode(), document.kind(), highlightEngine);
+                    document.lastModifiedMillis(), textDigest(document.text()),
+                    document.kind(), highlightEngine);
         }
     }
 

@@ -91,6 +91,64 @@ final class PageCacheTest {
         assertSame(one.join(), two.join());
     }
 
+    @Test
+    void hashCollidingEditsAreDistinctPages() throws Exception {
+        // "Aa" and "BB" share a String hash code, length and UTF-8 size.
+        DocumentContent before = DocumentContent.of(Path.of("e.md"), DocumentKind.MARKDOWN, "Aa");
+        DocumentContent after = DocumentContent.of(Path.of("e.md"), DocumentKind.MARKDOWN, "BB");
+        pages.request(PageCache.Key.of(before, STYLE, HighlightEngines.NONE), before)
+                .get(10, TimeUnit.SECONDS);
+
+        String page = pages.request(PageCache.Key.of(after, STYLE, HighlightEngines.NONE), after)
+                .get(10, TimeUnit.SECONDS);
+
+        assertTrue(page.contains("BB"));
+        assertFalse(page.contains("Aa"));
+    }
+
+    @Test
+    void keysDigestTheTextInsteadOfRetainingIt() {
+        String text = "x".repeat(100_000);
+        var key = PageCache.Key.of(markdown("g.md", text), STYLE, HighlightEngines.NONE);
+        var same = PageCache.Key.of(markdown("g.md", new String(text)), STYLE,
+                HighlightEngines.NONE);
+        // A lone surrogate and '?' encode alike in UTF-8, but not as UTF-16 units.
+        var surrogate = PageCache.Key.of(markdown("g.md", "\uD800"), STYLE,
+                HighlightEngines.NONE);
+        var question = PageCache.Key.of(markdown("g.md", "?"), STYLE, HighlightEngines.NONE);
+
+        assertTrue(key.toString().length() < 1_000, "the key does not hold the text");
+        assertEquals(key, same);
+        assertNotEquals(surrogate, question);
+    }
+
+    @Test
+    void closeCompletesEveryPendingRequest() {
+        DocumentContent big = markdown("big.md", "```java\nclass A {}\n```\n".repeat(5_000));
+        DocumentContent small = markdown("small.md", "small");
+        CompletableFuture<String> running =
+                pages.request(PageCache.Key.of(big, STYLE, HighlightEngines.AUTOMATIC), big);
+        CompletableFuture<String> queued =
+                pages.request(PageCache.Key.of(small, STYLE, HighlightEngines.NONE), small);
+
+        pages.close();
+
+        assertTrue(running.isCancelled());
+        assertTrue(queued.isCancelled());
+    }
+
+    @Test
+    void requestsAfterCloseAreCancelledNotLeftPending() {
+        DocumentContent doc = markdown("f.md", "text");
+        var key = PageCache.Key.of(doc, STYLE, HighlightEngines.NONE);
+        pages.close();
+
+        assertTrue(pages.request(key, doc).isCancelled());
+        assertTrue(pages.request(key, doc).isCancelled());
+        assertTrue(pages.prefetch(key, doc).isCancelled());
+        assertFalse(pages.isCached(key));
+    }
+
     private static DocumentContent markdown(String name, String text) {
         int lines = (int) text.chars().filter(c -> c == '\n').count() + 1;
         int[] starts = new int[lines];

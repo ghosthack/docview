@@ -1,15 +1,20 @@
 package io.github.ghosthack.docview;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class SafeMarkupRendererTest {
+
+    private static final Duration FAST = Duration.ofSeconds(5);
 
     private static final ReaderStyle STYLE =
             new ReaderStyle(
@@ -226,6 +231,15 @@ class SafeMarkupRendererTest {
     }
 
     @Test
+    void xmlReaderShowsInternalEntityText() {
+        String page = SafeMarkupRenderer.page(content(DocumentKind.XML,
+                "<!DOCTYPE r [<!ENTITY e \"entity-text\">]><r><k>&e;</k><v>x</v></r>"),
+                STYLE);
+
+        assertTrue(page.contains("entity-text"));
+    }
+
+    @Test
     void xmlReaderWidensItsSharedScrollSurfaceForDeepTagPaths() {
         String page = SafeMarkupRenderer.page(content(DocumentKind.XML, """
                 <root><level><level><level><level><level><level>
@@ -319,6 +333,36 @@ class SafeMarkupRendererTest {
         assertTrue(body.contains("<td>extra</td><td>kept</td>"));
         assertFalse(body.contains("ignored"));
         assertTrue(body.endsWith("</tbody></table><p>After table</p>"));
+    }
+
+    @Test
+    void markdownTablePaddingStaysLinearUnderAWideHeader() {
+        String md = "|a".repeat(128) + "|\n" + "|---".repeat(128) + "|\n"
+                + "|\n".repeat(50_000);
+        String body = assertTimeoutPreemptively(FAST,
+                () -> SafeMarkupRenderer.markdownBody(md));
+
+        assertTrue(body.startsWith("<table class=\"markdown-table\">"));
+        assertTrue(body.length() < 20L * md.length(),
+                "output stays linear: " + body.length());
+    }
+
+    @Test
+    void markdownHeaderWiderThanTheColumnCapIsNotATable() {
+        int columns = SafeMarkupRenderer.MAX_TABLE_COLUMNS + 1;
+        String body = SafeMarkupRenderer.markdownBody(
+                "|a".repeat(columns) + "|\n" + "|---".repeat(columns) + "|\n|\n");
+
+        assertFalse(body.contains("<table"));
+    }
+
+    @Test
+    void markdownBlankRunsInsideAListStayLinear() {
+        String md = "- a\n" + "\n".repeat(200_000) + "- b\n";
+        String body = assertTimeoutPreemptively(FAST,
+                () -> SafeMarkupRenderer.markdownBody(md));
+
+        assertEquals("<ul><li>a</li><li>b</li></ul>", body);
     }
 
     @Test
@@ -529,6 +573,29 @@ class SafeMarkupRendererTest {
         assertFalse(page.contains("Media Browser — full codebase review"));
         assertFalse(page.contains("--ground"));
         assertFalse(page.contains("background: var"));
+    }
+
+    @Test
+    void htmlNestedPastTheDepthCapRendersAsSourceQuickly() {
+        int n = 50_000;
+        String unmatched = "<div>" + "<b>".repeat(n) + "</i>".repeat(n);
+        String body = assertTimeoutPreemptively(FAST,
+                () -> SafeMarkupRenderer.htmlBody(unmatched));
+        assertTrue(body.startsWith("<pre class=\"plain\">&lt;div&gt;&lt;b&gt;"));
+
+        String fonts = "<font>" + "<b>".repeat(n) + "</font>".repeat(n);
+        assertTrue(assertTimeoutPreemptively(FAST,
+                () -> SafeMarkupRenderer.htmlBody(fonts))
+                .startsWith("<pre class=\"plain\">"));
+    }
+
+    @Test
+    void htmlNestedWithinTheDepthCapRendersNormally() {
+        String html = "<div>".repeat(100) + "<p>deep</p>" + "</div>".repeat(100);
+        String body = SafeMarkupRenderer.htmlBody(html);
+
+        assertFalse(body.contains("<pre class=\"plain\">"));
+        assertTrue(body.contains("<div><div><p>deep</p></div></div>"));
     }
 
     @Test

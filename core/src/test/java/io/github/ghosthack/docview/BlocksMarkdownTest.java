@@ -10,12 +10,14 @@ import io.github.ghosthack.docview.Blocks.Run;
 import io.github.ghosthack.docview.Blocks.TableRow;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class BlocksMarkdownTest {
@@ -101,6 +103,48 @@ final class BlocksMarkdownTest {
         assertFalse(first.block().tokens(0, first.text()).isEmpty());
         assertTrue(((CodeLine) rows.get(1)).block().tokens(1, "").isEmpty());
         model.close();
+    }
+
+    @Test
+    void tablePaddingIsBoundedAndMatchesTheRenderer() {
+        String markdown = "|a".repeat(128) + "|\n" + "|---".repeat(128) + "|\n"
+                + "|\n".repeat(50_000);
+        List<Row> rows = assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> parse(markdown).rows());
+        List<TableRow> tableRows = rows.stream()
+                .filter(TableRow.class::isInstance).map(TableRow.class::cast).toList();
+        long cells = tableRows.stream().mapToLong(row -> row.cells().size()).sum();
+        String body = SafeMarkupRenderer.markdownBody(markdown);
+
+        assertTrue(cells < markdown.length(), "cells stay linear: " + cells);
+        assertEquals(body.split("<tr>", -1).length - 1, tableRows.size());
+        assertTrue(tableRows.getLast().last());
+    }
+
+    @Test
+    void blankRunsInsideAListStayLinear() {
+        String markdown = "- a\n" + "\n".repeat(200_000) + "- b\n";
+        List<Row> rows = assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> parse(markdown).rows());
+
+        assertEquals(2, rows.size());
+        assertTrue(((ListItem) rows.getLast()).lastInList());
+    }
+
+    @Test
+    void highlightedLinesStayHighlightedOnceTheBudgetIsSpent() {
+        String[] lines = {"int answer = 42;"};
+        HighlightLanguage language = HighlightLanguage.forMarkdownFence("```java");
+        var budget = new HighlightBudget(1);
+        try (var block = new Blocks.CodeBlock(
+                SafeMarkupRenderer.fencedCodeDocument(lines, 0, 1, language.kind()),
+                language, HighlightEngines.VANILLA, 1, true, budget)) {
+            List<HighlightToken> first = block.tokens(0, lines[0]);
+
+            assertTrue(budget.exhausted());
+            assertTrue(first.stream().anyMatch(t -> t.role() != HighlightRole.PLAIN));
+            assertEquals(first, block.tokens(0, lines[0]));
+        }
     }
 
     @Test

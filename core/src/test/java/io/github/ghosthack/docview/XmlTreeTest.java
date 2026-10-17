@@ -5,7 +5,9 @@ import io.github.ghosthack.docview.XmlTree.Kind;
 import io.github.ghosthack.docview.XmlTree.XmlNode;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -69,6 +71,86 @@ final class XmlTreeTest {
                 + "<!DOCTYPE r [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><r>&x;</r>");
 
         if (tree.root() != null) assertFalse(tree.root().value().contains("root:"));
+    }
+
+    @Test
+    void internalEntitiesAreExpandedIntoTextAndElements() {
+        XmlNode root = XmlTree.parse("<!DOCTYPE r [<!ENTITY e \"hello\">"
+                + "<!ENTITY b \"<b>bold</b>\">]>"
+                + "<r><k>&e; world</k><j>x&e;y</j><v>&b;</v></r>").root();
+
+        assertEquals("hello world", root.children().get(0).value());
+        assertEquals("xhelloy", root.children().get(1).value());
+        XmlNode v = root.children().get(2);
+        assertEquals(List.of("b"), v.children().stream().map(XmlNode::tag).toList());
+        assertEquals("bold", v.children().get(0).value());
+    }
+
+    @Test
+    void entityExpansionBombsAreRefused() {
+        var xml = new StringBuilder("<!DOCTYPE r [<!ENTITY l0 \"lol\">");
+        for (int i = 1; i <= 9; i++) {
+            xml.append("<!ENTITY l").append(i).append(" \"")
+                    .append(("&l" + (i - 1) + ";").repeat(10)).append("\">");
+        }
+        XmlTree.Tree tree = XmlTree.parse(xml.append("]><r>&l9;</r>").toString());
+
+        assertNull(tree.root());
+        assertNotNull(tree.error());
+    }
+
+    @Test
+    void nestingBeyondTheDepthCapShowsALimitRowInsteadOfFailing() {
+        int depth = SafeMarkupRenderer.MAX_XML_TREE_DEPTH + 72;
+        XmlTree.Tree tree = XmlTree.parse("<a>".repeat(depth) + "</a>".repeat(depth));
+
+        assertNull(tree.error());
+        XmlNode node = tree.root();
+        while (node.kind() == Kind.ELEMENT) node = node.children().getFirst();
+        assertEquals("Deeper nodes are not shown", node.tag());
+        assertEquals(SafeMarkupRenderer.MAX_XML_TREE_DEPTH + 1, node.depth());
+    }
+
+    @Test
+    void manyAttributesStayProperties() {
+        var xml = new StringBuilder("<r");
+        for (int i = 0; i < 300; i++) xml.append(" a").append(i).append("=\"v\"");
+        XmlTree.Tree tree = XmlTree.parse(xml.append("/>").toString());
+
+        assertNull(tree.error());
+        assertEquals(300, tree.root().children().size());
+    }
+
+    @Test
+    void leadingByteOrderMarkIsIgnored() {
+        XmlTree.Tree tree = XmlTree.parse("\uFEFF<r>x</r>");
+
+        assertNull(tree.error());
+        assertEquals("x", tree.root().value());
+    }
+
+    @Test
+    void cacheKeepsHashCollidingEditsApart() throws Exception {
+        // "Aa" and "BB" share a String hash code, length and UTF-8 size.
+        var before = DocumentContent.of(Path.of("c.xml"), DocumentKind.XML, "<r>Aa</r>");
+        var after = DocumentContent.of(Path.of("c.xml"), DocumentKind.XML, "<r>BB</r>");
+        try (var cache = new XmlTreeCache()) {
+            cache.request(XmlTreeCache.Key.of(before), before).get(10, TimeUnit.SECONDS);
+            XmlTree.Tree tree = cache.request(XmlTreeCache.Key.of(after), after)
+                    .get(10, TimeUnit.SECONDS);
+
+            assertEquals("BB", tree.root().value());
+        }
+    }
+
+    @Test
+    void cacheKeyDoesNotRetainTheText() {
+        String text = "<r>" + "x".repeat(100_000) + "</r>";
+        var key = XmlTreeCache.Key.of(DocumentContent.of(Path.of("k.xml"), DocumentKind.XML, text));
+
+        assertTrue(key.toString().length() < 1_000);
+        assertEquals(key, XmlTreeCache.Key.of(
+                DocumentContent.of(Path.of("k.xml"), DocumentKind.XML, new String(text))));
     }
 
     @Test

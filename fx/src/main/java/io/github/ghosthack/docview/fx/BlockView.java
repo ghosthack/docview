@@ -117,6 +117,8 @@ public final class BlockView {
     private Position anchor;
     private Position focus;
     private boolean selecting;
+    /** Link text under the last primary press; only it may activate on release. */
+    private Text pressedLink;
 
     /** A caret position: a row and an offset into its {@link #rowText}. */
     record Position(int row, int offset) implements Comparable<Position> {
@@ -327,12 +329,14 @@ public final class BlockView {
     }
 
     private void pressed(MouseEvent event) {
+        pressedLink = null;
         if (event.getButton() != MouseButton.PRIMARY || onScrollBar(event)) return;
         if (event.getClickCount() == 2 && onDoubleClick != null) {
             onDoubleClick.run();
             event.consume();
             return;
         }
+        pressedLink = linkAt(event);
         list.requestFocus();
         Position at = positionAt(event.getSceneX(), event.getSceneY());
         anchor = focus = at;
@@ -342,15 +346,22 @@ public final class BlockView {
         event.consume();
     }
 
-    /** A click that did not drag activates the link under the pointer. */
+    /** A click that did not drag activates the link it pressed and released on. */
     private void released(MouseEvent event) {
         boolean dragged = anchor != null && !anchor.equals(focus);
+        Text link = pressedLink;
+        pressedLink = null;
         selecting = false;
         if (dragged || event.getButton() != MouseButton.PRIMARY) return;
-        if (event.getPickResult().getIntersectedNode() instanceof Text text
-                && text.getProperties().get(LINK_KEY) instanceof String target) {
+        if (link != null && linkAt(event) == link
+                && link.getProperties().get(LINK_KEY) instanceof String target) {
             Platform.runLater(() -> linkActivated.accept(target));
         }
+    }
+
+    private static Text linkAt(MouseEvent event) {
+        return event.getPickResult().getIntersectedNode() instanceof Text text
+                && text.getProperties().get(LINK_KEY) instanceof String ? text : null;
     }
 
     private void dragged(MouseEvent event) {
@@ -421,7 +432,8 @@ public final class BlockView {
 
     private record Fonts(String proseFamily, Font prose, Font proseBold,
                          Font proseBoldItalic, Font code, Font codeSmall,
-                         Font symbol, double em, double lineSpacing) {
+                         Font symbol, double em, double lineSpacing,
+                         boolean bold, boolean italic) {
         Fonts(ReaderStyle style) {
             this(style, family(style.readerFontFamily(), PROSE_FALLBACKS),
                     family(style.codeFontFamily(), CODE_FALLBACKS));
@@ -435,7 +447,8 @@ public final class BlockView {
                     font(code, style, false, false, 0.92),
                     Font.font("Apple Symbols", style.fontSize() * 1.25),
                     style.fontSize(),
-                    Math.max(0, (style.lineSpacing() - 1) * style.fontSize()));
+                    Math.max(0, (style.lineSpacing() - 1) * style.fontSize()),
+                    style.bold(), style.italic());
         }
 
         /** First installed of {@code preferred} then {@code fallbacks}, like CSS. */
@@ -457,17 +470,20 @@ public final class BlockView {
 
         /**
          * The Reader stylesheet makes {@code em} bold italic
-         * ({@code font-weight:700}); HTML {@code i} stays plain italic.
+         * ({@code font-weight:700}); HTML {@code i} stays plain italic. Both
+         * inherit the style's weight and posture, as headings do.
          */
         Font proseFor(Run run, boolean bold, double scale) {
-            boolean strong = bold || run.strong() || run.emphasis();
-            boolean italic = run.emphasis() || run.italic();
-            if (scale != 1 || (italic && !strong)) {
-                return Font.font(proseFamily, strong ? FontWeight.BOLD : FontWeight.NORMAL,
-                        italic ? FontPosture.ITALIC : FontPosture.REGULAR,
-                        prose.getSize() * scale);
+            boolean strong = this.bold || bold || run.strong() || run.emphasis();
+            boolean italic = this.italic || run.emphasis() || run.italic();
+            if (scale == 1) {
+                if (strong == this.bold && italic == this.italic) return prose;
+                if (strong && italic) return proseBoldItalic;
+                if (strong && italic == this.italic) return proseBold;
             }
-            return italic ? proseBoldItalic : strong ? proseBold : prose;
+            return Font.font(proseFamily, strong ? FontWeight.BOLD : FontWeight.NORMAL,
+                    italic ? FontPosture.ITALIC : FontPosture.REGULAR,
+                    prose.getSize() * scale);
         }
     }
 
@@ -755,6 +771,7 @@ public final class BlockView {
                     CornerRadii.EMPTY, new BorderWidths(0, 1, 0, 0))));
             var code = new TextFlow();
             code.setLineSpacing(fonts.lineSpacing());
+            code.setTabSize(style.tabSize());
             String text = line.text();
             int at = 0;
             for (HighlightToken token : line.block().tokens(line.line(), text)) {

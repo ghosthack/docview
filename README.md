@@ -131,14 +131,19 @@ native views use.
   images, frames, objects and remote resources are discarded. Link targets
   survive only as inert metadata; nothing navigates or fetches.
 - Generated WebView pages carry a deny-by-default content security policy.
-- XML is parsed with external entities, DTDs, schemas and XInclude disabled.
-  The tree is capped at 20,000 nodes, depth 128 and 20,000 leaf pills, and
-  inputs over 16 Mi characters are refused before a DOM is built.
+- XML is parsed with external entities, external DTDs, schemas and XInclude
+  disabled, so parsing never touches the network or file system. Documents
+  with an internal DOCTYPE are accepted and their internal entities are
+  expanded under the JDK's secure-processing limits, which stop entity
+  expansion attacks such as "billion laughs". The tree is capped at 20,000
+  nodes, depth 128 and 20,000 leaf pills, and inputs over 16 Mi characters
+  are refused before a DOM is built.
 - Markdown quote and list nesting is capped at depth 32, and inline parsing is
   linear in the line length.
 - Highlighting is bounded: TextMate skips lines over 2,000 characters,
-  interrupts any line still tokenizing after 100 ms, and stops after about
-  1 s per code block; each parsed document also has a shared budget of about
+  interrupts a line once its regex searches have taken 100 ms (one-time
+  grammar compilation is not counted), and stops after about 1 s per code
+  block; each parsed document also has a shared budget of about
   1.5 s. Past these limits code renders plain.
 - When XML cannot be shown as a tree, at most 1 Mi characters of its source
   are shown instead.

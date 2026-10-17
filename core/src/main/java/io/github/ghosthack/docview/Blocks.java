@@ -3,11 +3,14 @@ package io.github.ghosthack.docview;
 import io.github.ghosthack.docview.SafeMarkupRenderer.ListBlock;
 import io.github.ghosthack.docview.SafeMarkupRenderer.ListNode;
 import io.github.ghosthack.docview.SafeMarkupRenderer.TableAlignment;
+import io.github.ghosthack.docview.SafeMarkupRenderer.TableBody;
 import io.github.ghosthack.docview.SafeMarkupRenderer.TableHeader;
 import io.github.ghosthack.docview.SafeMarkupRenderer.Task;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 
 /**
@@ -147,6 +150,8 @@ public final class Blocks {
         private final int lineCount;
         private final boolean lineNumbers;
         private final HighlightBudget budget;
+        /** Tokens already computed, kept once the document budget is spent. */
+        private final Map<Integer, List<HighlightToken>> computed = new HashMap<>();
         private HighlightSession session;
 
         CodeBlock(DocumentContent content, HighlightLanguage language,
@@ -177,11 +182,15 @@ public final class Blocks {
         /** Syntax tokens for one line; the session caches earlier lines' state. */
         public synchronized List<HighlightToken> tokens(int line, String text) {
             if (text.isEmpty()) return List.of();
+            List<HighlightToken> known = computed.get(line);
+            if (known != null) return known;
             if (budget.exhausted()) return HighlightEngines.plainLine(text);
             if (session == null) {
                 session = HighlightEngines.open(enginePreference, content, language);
             }
-            return budget.tokens(session, line, text);
+            List<HighlightToken> tokens = budget.tokens(session, line, text);
+            computed.put(line, tokens);
+            return tokens;
         }
 
         @Override
@@ -265,15 +274,9 @@ public final class Blocks {
             }
             TableHeader table = SafeMarkupRenderer.tableHeader(lines, lineIndex);
             if (table != null) {
-                List<List<String>> body = new ArrayList<>();
-                int rowIndex = lineIndex + 2;
-                while (rowIndex < lines.length
-                        && SafeMarkupRenderer.isTableBodyRow(lines[rowIndex])) {
-                    body.add(SafeMarkupRenderer.normalizeCells(
-                            SafeMarkupRenderer.tableCells(lines[rowIndex]),
-                            table.cells().size()));
-                    rowIndex++;
-                }
+                TableBody tableBody = SafeMarkupRenderer.tableBody(
+                        lines, lineIndex, table.cells().size());
+                List<List<String>> body = tableBody.rows();
                 var layout = new TableBlock(table.alignments(),
                         columnWidths(table.cells(), body));
                 rows.add(new TableRow(layout, cellRuns(table.cells()), true,
@@ -282,7 +285,7 @@ public final class Blocks {
                     rows.add(new TableRow(layout, cellRuns(body.get(r)), false,
                             r == body.size() - 1, quoteDepth));
                 }
-                lineIndex = rowIndex - 1;
+                lineIndex = tableBody.lastLine();
                 continue;
             }
             String trimmed = line.strip();

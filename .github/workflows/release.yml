@@ -13,8 +13,10 @@ on:
 permissions:
   contents: read
 
+# Manual dry runs get their own group, so they can never displace a pending
+# release (GitHub keeps only one pending run per group).
 concurrency:
-  group: maven-central-release
+  group: maven-central-${{ github.event_name == 'release' && 'release' || 'dry-run' }}
   cancel-in-progress: false
 
 jobs:

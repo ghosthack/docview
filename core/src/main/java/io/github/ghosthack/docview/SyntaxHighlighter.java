@@ -34,7 +34,10 @@ final class SyntaxHighlighter {
 
     private static final String NUMBER_LITERAL =
             "(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|"
-                    + "\\d(?:[\\d_]*\\.?[\\d_]*)?"
+                    // Atomic: a shorter mantissa is always followed by a
+                    // digit, '_' or '.', which the trailing lookahead rejects,
+                    // so backtracking into it only costs time.
+                    + "\\d(?>[\\d_]*\\.?[\\d_]*)?"
                     + "(?:[eE][+-]?\\d+)?[fFdDlL]?)";
     private static final Pattern NUMBER = Pattern.compile(
             "(?<![\\w.])" + NUMBER_LITERAL + "(?![\\w.])");
@@ -63,9 +66,10 @@ final class SyntaxHighlighter {
     private static final Pattern XML_COMMENT = Pattern.compile("<!--[\\s\\S]*?-->");
     private static final Pattern XML_TAG_PREFIX =
             Pattern.compile("(?:</?|<!|<\\?)[A-Za-z_][A-Za-z0-9_.:-]*");
-    private static final Pattern XML_TAG_END =
-            Pattern.compile(
-                    "(?<=<[^>]{0,8192})(?:/?>|\\?>)");
+    // Only a tag end while a '<' earlier on the line is still open; see
+    // insideTag, which replaces a variable-length lookbehind that rescanned
+    // the line behind every candidate position.
+    private static final Pattern XML_TAG_END = Pattern.compile("/?>|\\?>");
     private static final Pattern XML_ATTRIBUTE = Pattern.compile(
             "(?<![A-Za-z0-9_.:-])[A-Za-z_:][A-Za-z0-9_.:-]*(?=\\s*=)");
     private static final Pattern XML_UNQUOTED_VALUE =
@@ -74,7 +78,7 @@ final class SyntaxHighlighter {
     private static final Pattern YAML_KEY = Pattern.compile("^\\s*[A-Za-z0-9_.-]+(?=\\s*:)");
     private static final Pattern JSON_KEY = Pattern.compile("\"(?:\\\\.|[^\"\\\\])*\"(?=\\s*:)");
     private static final Pattern MD_HEADING = Pattern.compile("^\\s{0,3}(?:#{1,6}\\s+.*|[-=*]{3,}\\s*)$");
-    private static final Pattern MD_LINK = Pattern.compile("!?\\[[^]]*]\\([^)]*\\)|<https?://[^>]+>");
+    private static final Pattern MD_LINK = Pattern.compile("!?\\[[^]]*+]\\([^)]*+\\)|<https?://[^>]++>");
     private static final Pattern MD_EMPHASIS = Pattern.compile(
             "`[^`]+`|\\*\\*[^*]+\\*\\*|__[^_]+__|(?<!\\*)\\*[^*]+\\*(?!\\*)|(?<!_)_[^_]+_(?!_)");
 
@@ -118,6 +122,16 @@ final class SyntaxHighlighter {
             "then", "throw", "trace", "try", "unset", "update", "uplevel",
             "upvar", "variable", "vwait", "while", "yield");
 
+    private static final int LONGEST_KEYWORD = java.util.stream.Stream.of(
+                    JAVA_KEYWORDS, GENERAL_KEYWORDS, RUBY_KEYWORDS, TCL_KEYWORDS)
+            .flatMap(Set::stream).mapToInt(String::length).max().orElse(0);
+
+    /**
+     * Longest line the tokenizer colors; longer lines render plain, matching
+     * the TextMate engine's cap and bounding the regex work for one line.
+     */
+    static final int MAX_LINE_LENGTH = 2_000;
+
     private SyntaxHighlighter() {
     }
 
@@ -155,26 +169,28 @@ final class SyntaxHighlighter {
     }
 
     public static List<Segment> highlightLine(String line, DocumentKind kind, boolean enabled) {
-        if (!enabled || line.isEmpty()) return List.of(new Segment(line, Style.PLAIN));
+        if (!enabled || line.isEmpty() || line.length() > MAX_LINE_LENGTH) {
+            return List.of(new Segment(line, Style.PLAIN));
+        }
         List<Rule> rules = rulesFor(kind);
+        var scanners = new ArrayList<RuleScanner>(rules.size());
+        for (Rule rule : rules) scanners.add(new RuleScanner(rule, line));
+        // Prose/plain formats must not inherit the programming keyword
+        // table: sentence-openers such as "For" or "Use" are not code.
+        Keywords keywords = usesKeywordRules(kind)
+                ? new Keywords(line, kind) : null;
         var result = new ArrayList<Segment>();
         int cursor = 0;
         while (cursor < line.length()) {
             Match best = null;
-            for (Rule rule : rules) {
-                Matcher matcher = rule.pattern.matcher(line);
-                if (!matcher.find(cursor)) continue;
-                int start = matcher.start();
-                int end = matcher.end();
-                if (best == null || start < best.start
-                        || (start == best.start && rule.priority < best.priority)) {
-                    best = new Match(start, end, rule.style, rule.priority);
+            for (RuleScanner scanner : scanners) {
+                Match match = scanner.next(cursor);
+                if (match != null && (best == null || match.start < best.start
+                        || (match.start == best.start && match.priority < best.priority))) {
+                    best = match;
                 }
             }
-            // Prose/plain formats must not inherit the programming keyword
-            // table: sentence-openers such as "For" or "Use" are not code.
-            Match keyword = usesKeywordRules(kind)
-                    ? keywordAt(line, cursor, kind) : null;
+            Match keyword = keywords != null ? keywords.next(cursor) : null;
             if (keyword != null && (best == null || keyword.start < best.start
                     || (keyword.start == best.start && keyword.priority < best.priority))) {
                 best = keyword;
@@ -252,21 +268,29 @@ final class SyntaxHighlighter {
         };
     }
 
-    private static Match keywordAt(String line, int from, DocumentKind kind) {
-        Set<String> words = switch (kind) {
+    private static Set<String> keywordsFor(DocumentKind kind) {
+        return switch (kind) {
             case JAVA -> JAVA_KEYWORDS;
             case RUBY -> RUBY_KEYWORDS;
             case TCL -> TCL_KEYWORDS;
             default -> GENERAL_KEYWORDS;
         };
-        int i = from;
-        while (i < line.length() && !Character.isJavaIdentifierStart(line.charAt(i))) i++;
-        if (i >= line.length()) return null;
-        int end = i + 1;
-        while (end < line.length() && Character.isJavaIdentifierPart(line.charAt(end))) end++;
-        String word = line.substring(i, end);
-        if (!words.contains(word.toLowerCase(java.util.Locale.ROOT))) return null;
-        return new Match(i, end, Style.KEYWORD, 4);
+    }
+
+    /**
+     * Marks the positions where a tag end may start: some '<' earlier on the
+     * line has not yet been closed by a '>'.
+     */
+    private static boolean[] insideTag(String line) {
+        boolean[] inside = new boolean[line.length()];
+        boolean open = false;
+        for (int i = 0; i < line.length(); i++) {
+            inside[i] = open;
+            char c = line.charAt(i);
+            if (c == '<') open = true;
+            else if (c == '>') open = false;
+        }
+        return inside;
     }
 
     private static boolean usesKeywordRules(DocumentKind kind) {
@@ -287,6 +311,90 @@ final class SyntaxHighlighter {
     }
 
     private record Rule(Pattern pattern, Style style, int priority) {
+    }
+
+    /**
+     * One rule's next match on a line. The cursor only moves forward and a
+     * match position does not depend on where the search began, so the cached
+     * match stays valid until the cursor passes its start; each rule therefore
+     * scans the line once instead of once per token.
+     */
+    private static final class RuleScanner {
+        private final Rule rule;
+        private final Matcher matcher;
+        private final boolean[] insideTag;
+        private Match next;
+        private boolean exhausted;
+
+        RuleScanner(Rule rule, String line) {
+            this.rule = rule;
+            this.matcher = rule.pattern.matcher(line);
+            this.insideTag = rule.pattern == XML_TAG_END ? insideTag(line) : null;
+        }
+
+        Match next(int cursor) {
+            if (exhausted) return null;
+            if (next != null && next.start >= cursor) return next;
+            int from = cursor;
+            while (matcher.find(from)) {
+                if (insideTag == null || insideTag[matcher.start()]) {
+                    next = new Match(matcher.start(), matcher.end(),
+                            rule.style, rule.priority);
+                    return next;
+                }
+                from = matcher.start() + 1;
+            }
+            exhausted = true;
+            next = null;
+            return null;
+        }
+    }
+
+    /**
+     * Keyword lookup for one line. The scan from any cursor skips to the next
+     * identifier start and reads the identifier through the following
+     * identifier-part characters; both tables are filled right to left, so
+     * the next keyword from any cursor is a constant-time lookup.
+     */
+    private static final class Keywords {
+        /** Index just past the identifier-part run that follows each index. */
+        private final int[] wordEnd;
+        /** Start of the first keyword the scan from each index reaches, or -1. */
+        private final int[] next;
+
+        Keywords(String line, DocumentKind kind) {
+            Set<String> words = keywordsFor(kind);
+            int length = line.length();
+            wordEnd = new int[length];
+            next = new int[length + 1];
+            next[length] = -1;
+            for (int i = length - 1; i >= 0; i--) {
+                wordEnd[i] = i + 1 < length
+                        && Character.isJavaIdentifierPart(line.charAt(i + 1))
+                        ? wordEnd[i + 1] : i + 1;
+                if (!Character.isJavaIdentifierStart(line.charAt(i))) {
+                    next[i] = next[i + 1];
+                } else {
+                    // A non-keyword identifier does not end the search: the
+                    // keyword may be a later word on the line.
+                    next[i] = isKeyword(line, i, wordEnd[i], words)
+                            ? i : next[wordEnd[i]];
+                }
+            }
+        }
+
+        Match next(int cursor) {
+            int start = next[cursor];
+            return start < 0 ? null
+                    : new Match(start, wordEnd[start], Style.KEYWORD, 4);
+        }
+
+        private static boolean isKeyword(
+                String line, int start, int end, Set<String> words) {
+            // Lower-casing never shortens a word, so longer ones cannot match.
+            return end - start <= LONGEST_KEYWORD && words.contains(
+                    line.substring(start, end).toLowerCase(java.util.Locale.ROOT));
+        }
     }
 
     private record Match(int start, int end, Style style, int priority) {

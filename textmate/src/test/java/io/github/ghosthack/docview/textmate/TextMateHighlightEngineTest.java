@@ -81,6 +81,50 @@ class TextMateHighlightEngineTest {
     }
 
     @Test
+    void coldGrammarCompilationDoesNotCutTheFirstLinesShort() {
+        // From review: in a fresh JVM, compiling the embedded JS on first use
+        // ran past TM4E's 50 ms wall-clock limit, so the line stopped early
+        // (partial tokens, mid-line state carried into the next line).
+        String script = "<script>var a = 1; function f(x) { return x * 2; }</script>";
+        DocumentContent html = content(Path.of("cold.html"), DocumentKind.HTML,
+                script + "\n" + script + "\n<p class=\"c\">ok</p>");
+        try (HighlightSession session = new TextMateHighlightEngine().open(
+                html, HighlightLanguage.forDocument(html))) {
+            for (int line = 0; line < 2; line++) {
+                var tokens = session.tokensForLine(line);
+                assertPartition(html, line, tokens);
+                assertTrue(tokens.stream().anyMatch(token -> token.role() == HighlightRole.NUMBER),
+                        line + ": " + tokens);
+                assertTrue(tokens.stream().anyMatch(token -> token.role() == HighlightRole.KEYWORD
+                        || token.role() == HighlightRole.TYPE), line + ": " + tokens);
+            }
+            var last = session.tokensForLine(2);
+            assertTrue(last.stream().anyMatch(token -> token.role() == HighlightRole.TAG), last.toString());
+            assertTrue(last.stream().noneMatch(token -> token.role() == HighlightRole.STRING
+                    && token.end() - token.start() > 3), last.toString());
+        }
+    }
+
+    @Test
+    void aLineWhoseGrammarRuleFailsToCompileDoesNotStallTheSession() {
+        // The bundled JS/TS grammars' `using` declaration has a lookbehind
+        // Joni cannot compile; TM4E throws for that line on every call.
+        DocumentContent js = content(Path.of("using.js"), DocumentKind.SCRIPT,
+                "{\n  using res = getResource();\n  const b = \"y\"; // after\n}\nlet c = 42; // later");
+        try (HighlightSession session = new TextMateHighlightEngine().open(
+                js, HighlightLanguage.forDocument(js))) {
+            for (int line = 0; line < js.lineCount(); line++) {
+                assertPartition(js, line, session.tokensForLine(line));
+            }
+            var later = session.tokensForLine(4);
+            assertTrue(later.stream().anyMatch(token -> token.role() == HighlightRole.NUMBER),
+                    later.toString());
+            assertTrue(later.stream().anyMatch(token -> token.role() == HighlightRole.COMMENT),
+                    later.toString());
+        }
+    }
+
+    @Test
     void registersThroughServiceLoaderWhenOnTheClasspath() {
         assertTrue(HighlightEngines.choices().stream().anyMatch(
                 choice -> choice.id().equals(HighlightEngines.TEXTMATE)));
