@@ -65,9 +65,14 @@ public final class SafeMarkupRenderer {
             HTML.Tag.TD, HTML.Tag.CAPTION, HTML.Tag.DIV, HTML.Tag.SPAN,
             HTML.Tag.B, HTML.Tag.I, HTML.Tag.U, HTML.Tag.S, HTML.Tag.SUB, HTML.Tag.SUP,
             HTML.Tag.A);
+    /**
+     * Elements dropped with their content. OBJECT and APPLET are not here:
+     * like a browser without plugins, their tags are dropped and their
+     * fallback content is shown (through the same whitelist), so an unclosed
+     * one no longer hides the rest of the document.
+     */
     static final Set<HTML.Tag> SUPPRESSED = Set.of(
-            HTML.Tag.SCRIPT, HTML.Tag.STYLE, HTML.Tag.TITLE,
-            HTML.Tag.OBJECT, HTML.Tag.APPLET);
+            HTML.Tag.SCRIPT, HTML.Tag.STYLE, HTML.Tag.TITLE);
     private static final Set<String> RAW_TEXT_SUPPRESSED = Set.of(
             "script", "style", "title");
     private static final Pattern INLINE_CODE = Pattern.compile("`([^`]+)`");
@@ -90,6 +95,9 @@ public final class SafeMarkupRenderer {
     private static final Pattern BULLET = Pattern.compile("^[-+*]\\s+(.*)$");
     private static final Pattern NUMBERED = Pattern.compile("^\\d+[.)]\\s+(.*)$");
     private static final Pattern GRAPHEME = Pattern.compile("\\X");
+    /** Three or more of one of - * _, optionally separated by spaces or tabs. */
+    private static final Pattern THEMATIC_BREAK = Pattern.compile(
+            "(?:-[ \\t]*){3,}|(?:\\*[ \\t]*){3,}|(?:_[ \\t]*){3,}");
     private static final Pattern LIST_ITEM = Pattern.compile(
             "^(\\s*)([-+*]|(\\d+[.)]))\\s+(.*)$");
     private static final Pattern UNCHECKED_TASK = Pattern.compile(
@@ -555,7 +563,7 @@ public final class SafeMarkupRenderer {
                         .append("</h").append(level).append('>');
                 continue;
             }
-            if (trimmed.matches("[-*_]{3,}")) {
+            if (SafeMarkupRenderer.isThematicBreak(trimmed)) {
                 out.append("<hr>");
                 continue;
             }
@@ -680,8 +688,13 @@ public final class SafeMarkupRenderer {
         return trimmed.startsWith("```")
                 || trimmed.startsWith(">")
                 || HEADING.matcher(trimmed).matches()
-                || trimmed.matches("[-*_]{3,}")
+                || SafeMarkupRenderer.isThematicBreak(trimmed)
                 || tableHeader(lines, lineIndex) != null;
+    }
+
+    /** A thematic break ({@code ---}, {@code * * *}, {@code _ _ _}) on a stripped line. */
+    static boolean isThematicBreak(String trimmed) {
+        return THEMATIC_BREAK.matcher(trimmed).matches();
     }
 
     static ListMarker listMarker(String line) {
@@ -729,6 +742,13 @@ public final class SafeMarkupRenderer {
             }
             String tag = ordered ? "ol" : "ul";
             out.append('<').append(tag);
+            if (ordered) {
+                // Number like the source (and the native reader): from the
+                // first item's marker, so "3." starts at 3 and an ordered
+                // run after a bullet continues instead of restarting at 1.
+                String number = startNumber(nodes.get(start).marker());
+                if (number != null) out.append(" start=\"").append(number).append('"');
+            }
             if (taskTree) out.append(" class=\"task-tree\"");
             out.append('>');
             for (int index = start; index < end; index++) {
@@ -741,6 +761,22 @@ public final class SafeMarkupRenderer {
             out.append("</").append(tag).append('>');
             start = end;
         }
+    }
+
+    /**
+     * The start attribute value for an ordered marker such as {@code 3.}:
+     * its number without leading zeros, or null for 1 (the default) and for
+     * numbers over nine digits (as CommonMark limits them).
+     */
+    static String startNumber(String marker) {
+        int digits = 0;
+        while (digits < marker.length()
+                && marker.charAt(digits) >= '0' && marker.charAt(digits) <= '9') {
+            digits++;
+        }
+        String number = marker.substring(0, digits).replaceFirst("^0+(?=\\d)", "");
+        if (number.isEmpty() || number.length() > 9 || number.equals("1")) return null;
+        return number;
     }
 
     private static void appendListNode(
@@ -917,7 +953,7 @@ public final class SafeMarkupRenderer {
                 || HEADING.matcher(trimmed).matches()
                 || BULLET.matcher(trimmed).matches()
                 || NUMBERED.matcher(trimmed).matches()
-                || trimmed.matches("[-*_]{3,}")) {
+                || SafeMarkupRenderer.isThematicBreak(trimmed)) {
             return true;
         }
         return tableHeader(lines, lineIndex) != null;

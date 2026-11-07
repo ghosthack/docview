@@ -16,6 +16,18 @@ class SafeMarkupRendererTest {
 
     private static final Duration FAST = Duration.ofSeconds(5);
 
+    @Test
+    void orderedListsStartAtTheirFirstMarker() {
+        assertEquals("<ol start=\"3\"><li>a</li><li>b</li></ol>",
+                SafeMarkupRenderer.markdownBody("3. a\n4. b"));
+        assertEquals("<ol><li>a</li></ol><ul><li>b</li></ul><ol start=\"2\"><li>c</li></ol>",
+                SafeMarkupRenderer.markdownBody("1. a\n- b\n2. c"));
+        assertEquals("<ol start=\"7\"><li>x</li></ol>",
+                SafeMarkupRenderer.markdownBody("007) x"));
+        assertEquals("<ol><li>x</li></ol>", SafeMarkupRenderer.markdownBody("1234567890. x"),
+                "over nine digits keeps the default");
+    }
+
     private static final ReaderStyle STYLE =
             new ReaderStyle(
                     "Reader Serif", "Menlo", 15, false, false,

@@ -11,15 +11,6 @@ import io.github.ghosthack.docview.SafeMarkupRenderer.TableHeader;
 public final class MarkdownOutline {
 
     private static final Pattern HEADING = Pattern.compile("^(#{1,6})\\s+(.*)$");
-    // Same linear link shape as SafeMarkupRenderer: no brackets in the label
-    // and no parentheses in the target, so each attempt stops early.
-    private static final Pattern LINK = Pattern.compile(
-            "!?\\[([^\\[\\]]+)]\\(([^()]*)\\)");
-    private static final Pattern CODE = Pattern.compile("`([^`]*)`");
-    private static final Pattern STRONG =
-            Pattern.compile("\\*\\*([^*]+)\\*\\*|__([^_]+)__");
-    private static final Pattern EMPHASIS = Pattern.compile(
-            "(?<!\\*)\\*([^*]+)\\*(?!\\*)|(?<!_)_([^_]+)_(?!_)");
 
     private MarkdownOutline() {
     }
@@ -62,7 +53,7 @@ public final class MarkdownOutline {
                 headings.add(new Heading(
                         match.group(1).length(), displayText(match.group(2)),
                         anchor(headings.size())));
-            } else if (trimmed.matches("[-*_]{3,}")) {
+            } else if (SafeMarkupRenderer.isThematicBreak(trimmed)) {
                 continue;
             } else if (trimmed.startsWith(">")) {
                 while (lineIndex + 1 < lines.length
@@ -85,11 +76,12 @@ public final class MarkdownOutline {
         return "md-heading-" + headingIndex;
     }
 
+    /** The heading's text exactly as both readers display it. */
     private static String displayText(String markdown) {
-        String text = LINK.matcher(markdown).replaceAll("$1");
-        text = CODE.matcher(text).replaceAll("$1");
-        text = STRONG.matcher(text).replaceAll("$1$2");
-        text = EMPHASIS.matcher(text).replaceAll("$1$2");
-        return text.isBlank() ? "Untitled heading" : text.strip();
+        var text = new StringBuilder();
+        for (Blocks.Run run : Blocks.runs(SafeMarkupRenderer.inline(markdown))) {
+            text.append(run.text());
+        }
+        return text.toString().isBlank() ? "Untitled heading" : text.toString().strip();
     }
 }

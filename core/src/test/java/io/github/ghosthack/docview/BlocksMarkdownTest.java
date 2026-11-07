@@ -156,6 +156,16 @@ final class BlocksMarkdownTest {
         assertNull(rows.stream().filter(Heading.class::isInstance).findFirst().orElse(null));
     }
 
+    @Test
+    void spacedThematicBreaksAreRules() {
+        for (String rule : List.of("* * *", "- - -", "_ _ _", " -  -\t- -", "***", "___")) {
+            List<Row> rows = parse("a\n\n" + rule + "\n\nb").rows();
+            assertInstanceOf(Rule.class, rows.get(1), rule);
+            assertTrue(SafeMarkupRenderer.markdownBody("a\n\n" + rule + "\n\nb").contains("<hr>"), rule);
+        }
+        assertFalse(SafeMarkupRenderer.markdownBody("- * -").contains("<hr>"), "mixed markers");
+    }
+
     private static Blocks.Model parse(String markdown) {
         return Blocks.fromMarkdown(markdown, HighlightEngines.AUTOMATIC);
     }
