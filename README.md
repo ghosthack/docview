@@ -128,7 +128,8 @@ native views use.
 ## Safety
 
 - HTML passes a structural whitelist: scripts, styles, active attributes,
-  images, frames, objects and remote resources are discarded. Link targets
+  images, frames, objects and remote resources are discarded (an object's
+  fallback content is shown, like a browser without plugins). Link targets
   survive only as inert metadata; nothing navigates or fetches.
 - Generated WebView pages carry a deny-by-default content security policy.
 - XML is parsed with external entities, external DTDs, schemas and XInclude

@@ -29,6 +29,21 @@ class MarkdownOutlineTest {
     }
 
     @Test
+    void contentsTextMatchesTheRenderedHeading() {
+        String markdown = "# snake_case_name\n## `[a](b)` and **x**\n### a &amp; b\n";
+        List<MarkdownOutline.Heading> headings = MarkdownOutline.headings(markdown);
+        List<Blocks.Row> rows = Blocks.fromMarkdown(markdown, HighlightEngines.NONE).rows();
+
+        assertEquals(List.of("snake_case_name", "[a](b) and x", "a &amp; b"),
+                headings.stream().map(MarkdownOutline.Heading::text).toList());
+        for (int i = 0; i < rows.size(); i++) {
+            var rendered = new StringBuilder();
+            ((Blocks.Heading) rows.get(i)).runs().forEach(run -> rendered.append(run.text()));
+            assertEquals(rendered.toString(), headings.get(i).text());
+        }
+    }
+
+    @Test
     void ignoresHeadingSyntaxInsideFencedCodeAndQuotes() {
         List<MarkdownOutline.Heading> headings = MarkdownOutline.headings("""
                 # Included

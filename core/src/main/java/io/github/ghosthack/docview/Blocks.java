@@ -299,7 +299,7 @@ public final class Blocks {
                         anchor, quoteDepth));
                 continue;
             }
-            if (trimmed.matches("[-*_]{3,}")) {
+            if (SafeMarkupRenderer.isThematicBreak(trimmed)) {
                 rows.add(new Rule(quoteDepth));
                 continue;
             }

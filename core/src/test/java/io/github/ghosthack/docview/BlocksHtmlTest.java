@@ -25,7 +25,7 @@ final class BlocksHtmlTest {
     void dropsScriptsStylesAndTitlesLikeTheWebReader() {
         List<Row> rows = Blocks.fromHtml("<html><head><title>T</title>"
                 + "<style>p{color:red}</style></head><body><p>Kept</p>"
-                + "<script>alert(1)</script><object>x</object></body></html>").rows();
+                + "<script>alert(1)</script></body></html>").rows();
 
         assertEquals(1, rows.size());
         assertEquals("Kept", text(((Paragraph) rows.getFirst()).runs()));
@@ -142,6 +142,19 @@ final class BlocksHtmlTest {
         Blocks.Model nested = Blocks.fromHtml("<div>".repeat(100) + "deep" + "</div>".repeat(100));
         assertEquals("deep", text(assertInstanceOf(Paragraph.class, nested.rows().getFirst()).runs()));
     }
+    @Test
+    void anUnclosedObjectShowsItsFallbackInsteadOfHidingTheRest() {
+        String html = "<p>a</p><object data=\"x.swf\"><param name=\"p\" value=\"v\">"
+                + "<p>b</p><p>c</p>";
+        List<Row> rows = Blocks.fromHtml(html).rows();
+
+        assertEquals(List.of("a", "b", "c"),
+                rows.stream().map(row -> text(((Paragraph) row).runs())).toList());
+        String page = SafeMarkupRenderer.htmlBody(html);
+        assertTrue(page.contains("<p>c</p>"), page);
+        assertFalse(page.contains("object") || page.contains("param") || page.contains("swf"), page);
+    }
+
     @Test
     void wideHtmlTableOverManyRowsStaysBounded() {
         int n = 32_000; // about 0.9 MB of HTML; rows x widest row was 1G cells
