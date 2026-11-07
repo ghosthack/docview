@@ -141,10 +141,12 @@ native views use.
 - Markdown quote and list nesting is capped at depth 32, and inline parsing is
   linear in the line length.
 - Highlighting is bounded: TextMate skips lines over 2,000 characters,
-  interrupts a line once its regex searches have taken 100 ms (one-time
-  grammar compilation is not counted), and stops after about 1 s per code
-  block; each parsed document also has a shared budget of about
-  1.5 s. Past these limits code renders plain.
+  interrupts a line once its regex searches have taken 100 ms, and stops
+  after 1 s of search time per code block; each parsed document also has a
+  shared budget of 1.5 s, which a single call cannot run far past. For TextMate
+  these limits count regex search time only, so one-time grammar
+  compilation and waiting on another document's highlighting never use them
+  up. Past these limits code renders plain.
 - When XML cannot be shown as a tree, at most 1 Mi characters of its source
   are shown instead.
 

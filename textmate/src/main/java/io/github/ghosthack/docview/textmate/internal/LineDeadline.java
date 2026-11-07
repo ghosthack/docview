@@ -3,6 +3,7 @@ package io.github.ghosthack.docview.textmate.internal;
 import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 
 import org.joni.Matcher;
@@ -50,7 +51,16 @@ public final class LineDeadline {
 
     /** Runs {@code action} on this thread with a deadline of {@code limit}. */
     public static <T> T within(Duration limit, Supplier<T> action) {
-        var deadline = new LineDeadline(limit.toNanos());
+        return within(limit.toNanos(), action, searched -> { });
+    }
+
+    /**
+     * Runs {@code action} with a deadline of {@code limitNanos} of search
+     * time, then reports the search time it used to {@code searched}, also
+     * when it expired or failed.
+     */
+    public static <T> T within(long limitNanos, Supplier<T> action, LongConsumer searched) {
+        var deadline = new LineDeadline(limitNanos);
         LineDeadline outer = CURRENT.get();
         CURRENT.set(deadline);
         ACTIVE.add(deadline);
@@ -61,6 +71,7 @@ public final class LineDeadline {
             ACTIVE.remove(deadline);
             if (outer == null) CURRENT.remove();
             else CURRENT.set(outer);
+            searched.accept(deadline.searchedNanos);
         }
     }
 
@@ -81,8 +92,14 @@ public final class LineDeadline {
             if (deadline.expired) throw new Expired();
             return matcher.searchInterruptible(start, end, Option.DEFAULT);
         } catch (InterruptedException interrupted) {
+            // Joni also throws (and clears the flag) for a thread interrupt,
+            // such as an executor shutting down; keep that one visible.
+            if (!deadline.expired) Thread.currentThread().interrupt();
             throw new Expired();
         } finally {
+            // Clear runningSince before adding to searchedNanos: the watchdog
+            // re-reads runningSince after searchedNanos, so it never counts a
+            // finished search twice.
             deadline.running = null;
             deadline.runningSince = 0;
             deadline.searchedNanos += System.nanoTime() - started;
@@ -112,7 +129,11 @@ public final class LineDeadline {
                 Matcher matcher = deadline.running;
                 long since = deadline.runningSince;
                 if (matcher == null || since == 0) continue;
-                if (deadline.searchedNanos + (now - since) < deadline.limitNanos) continue;
+                long searched = deadline.searchedNanos;
+                // Unchanged runningSince means searchedNanos does not yet
+                // include this search (the owner clears it first).
+                if (deadline.runningSince != since) continue;
+                if (searched + (now - since) < deadline.limitNanos) continue;
                 deadline.expired = true;
                 matcher.interrupt();
             }

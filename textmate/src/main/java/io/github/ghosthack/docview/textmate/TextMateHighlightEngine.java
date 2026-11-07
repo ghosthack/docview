@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.LongConsumer;
 
 import io.github.ghosthack.docview.textmate.internal.tm4e.core.grammar.IGrammar;
 import io.github.ghosthack.docview.textmate.internal.tm4e.core.grammar.IStateStack;
@@ -53,7 +54,7 @@ public final class TextMateHighlightEngine implements HighlightEngine {
      * compilation and cut the first lines after a cold start short.
      */
     static final Duration LINE_HARD_LIMIT = Duration.ofMillis(100);
-    /** Total tokenizing time per session (code block or document). */
+    /** Total regex search time per session (code block or document). */
     static final long SESSION_BUDGET_NANOS = 1_000_000_000L;
 
     private static final Map<String, GrammarResource> GRAMMARS =
@@ -189,15 +190,40 @@ public final class TextMateHighlightEngine implements HighlightEngine {
         }
 
         @Override
+        public List<HighlightToken> tokensForLine(int lineIndex) {
+            return tokensForLine(lineIndex, Long.MAX_VALUE, spent -> { });
+        }
+
+        /**
+         * Budgets count regex search time only: one-time grammar compilation
+         * and waiting for another document using the same grammar are left
+         * out, so a cold start or a concurrent build does not use them up.
+         */
+        @Override
         public synchronized List<HighlightToken> tokensForLine(
-                int lineIndex) {
+                int lineIndex, long maxNanos, LongConsumer spent) {
             HighlightEngines.lineText(document, lineIndex);
+            long callNanos = 0;
+            try {
+                callNanos = tokenizeThrough(lineIndex, maxNanos);
+            } finally {
+                spent.accept(callNanos);
+            }
+            return tokens.get(lineIndex);
+        }
+
+        /** Tokenizes up to {@code lineIndex}; returns the search time used. */
+        private long tokenizeThrough(int lineIndex, long maxNanos) {
+            long callNanos = 0;
             while (tokens.size() <= lineIndex) {
                 int nextLine = tokens.size();
                 String line =
                         HighlightEngines.lineText(document, nextLine);
-                if (line.length() > MAX_LINE_LENGTH
-                        || spentNanos >= SESSION_BUDGET_NANOS) {
+                long allowance = Math.min(
+                        Math.min(LINE_HARD_LIMIT.toNanos(),
+                                SESSION_BUDGET_NANOS - spentNanos),
+                        maxNanos - callNanos);
+                if (line.length() > MAX_LINE_LENGTH || allowance <= 0) {
                     // The skipped line may have closed a comment or string;
                     // restart from the initial state rather than carry a
                     // possibly stale one into the following lines.
@@ -206,20 +232,21 @@ public final class TextMateHighlightEngine implements HighlightEngine {
                     continue;
                 }
                 ITokenizeLineResult<IToken[]> result;
+                long[] searched = new long[1];
                 synchronized (grammar) {
-                    long started = System.nanoTime();
                     try {
                         IStateStack stack = ruleStack;
-                        result = LineDeadline.within(LINE_HARD_LIMIT,
-                                () -> grammar.tokenizeLine(line, stack, null));
+                        result = LineDeadline.within(allowance,
+                                () -> grammar.tokenizeLine(line, stack, null),
+                                nanos -> searched[0] = nanos);
                     } catch (RuntimeException failed) {
                         // Expired, or a grammar rule Joni cannot compile
                         // (TMException); either way move past this line.
                         result = null;
-                    } finally {
-                        spentNanos += System.nanoTime() - started;
                     }
                 }
+                spentNanos += searched[0];
+                callNanos += searched[0];
                 if (result == null || result.isStoppedEarly()) {
                     // Partial tokens and a mid-line rule stack would corrupt
                     // the following lines.
@@ -230,7 +257,7 @@ public final class TextMateHighlightEngine implements HighlightEngine {
                 ruleStack = result.getRuleStack();
                 tokens.add(convert(line, result.getTokens()));
             }
-            return tokens.get(lineIndex);
+            return callNanos;
         }
     }
 
