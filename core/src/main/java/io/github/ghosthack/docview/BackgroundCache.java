@@ -74,7 +74,7 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
             V cached = cache.get(key);
             if (cached != null) return CompletableFuture.completedFuture(cached);
             CompletableFuture<V> inFlight = building.get(key);
-            if (inFlight != null) return inFlight;
+            if (inFlight != null) return follower(inFlight);
             future = new CompletableFuture<>();
             building.put(key, future);
         }
@@ -86,7 +86,7 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
             }
             future.cancel(false);
         }
-        return future;
+        return follower(future);
     }
 
     /**
@@ -101,7 +101,7 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
             V cached = cache.get(key);
             if (cached != null) return CompletableFuture.completedFuture(cached);
             CompletableFuture<V> inFlight = building.get(key);
-            if (inFlight != null) return inFlight;
+            if (inFlight != null) return follower(inFlight);
         }
         var result = new CompletableFuture<V>();
         Runnable task = () -> {
@@ -148,6 +148,16 @@ public abstract sealed class BackgroundCache<K, V> implements AutoCloseable
         var future = new CompletableFuture<V>();
         future.cancel(false);
         return future;
+    }
+
+    /**
+     * A caller's own view of a shared build: cancelling or completing it
+     * leaves the build and every other caller untouched.
+     */
+    private static <V> CompletableFuture<V> follower(CompletableFuture<V> build) {
+        var result = new CompletableFuture<V>();
+        build.whenComplete((value, error) -> forward(value, error, result));
+        return result;
     }
 
     private static <V> void forward(V value, Throwable error,

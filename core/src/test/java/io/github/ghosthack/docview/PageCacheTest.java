@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -89,6 +90,24 @@ final class PageCacheTest {
         CompletableFuture<String> two = pages.request(key, doc);
 
         assertSame(one.join(), two.join());
+    }
+
+    @Test
+    void cancellingOneRequestLeavesTheSharedBuildRunning() throws Exception {
+        DocumentContent doc = markdown("e.md", "```java\nclass A {}\n```\n".repeat(400));
+        var key = PageCache.Key.of(doc, STYLE, HighlightEngines.AUTOMATIC);
+        CompletableFuture<String> prefetched = pages.prefetch(key, doc);
+        CompletableFuture<String> abandoned = pages.request(key, doc);
+        CompletableFuture<String> other = pages.request(key, doc);
+
+        assertNotSame(abandoned, other, "every caller gets its own future");
+        abandoned.cancel(false);
+        prefetched.orTimeout(1, TimeUnit.NANOSECONDS);
+        CompletableFuture<String> again = pages.request(key, doc);
+
+        assertEquals(SafeMarkupRenderer.page(doc, STYLE, HighlightEngines.AUTOMATIC),
+                again.get(30, TimeUnit.SECONDS));
+        assertSame(again.join(), other.get(30, TimeUnit.SECONDS));
     }
 
     @Test

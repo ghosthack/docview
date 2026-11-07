@@ -214,8 +214,19 @@ final class HtmlBlockParser {
             } else if (tag == HTML.Tag.TH || tag == HTML.Tag.TD) {
                 if (tableCells != null) {
                     flushRun();
-                    tableCells.add(trimRuns(List.copyOf(runs)));
+                    List<Run> cell = trimRuns(List.copyOf(runs));
                     runs.clear();
+                    if (tableCells.size() < SafeMarkupRenderer.MAX_TABLE_COLUMNS) {
+                        tableCells.add(cell);
+                    } else if (!cell.isEmpty()) {
+                        // Cells past the column cap join the last column, so
+                        // padding stays bounded by the cap times the rows
+                        // instead of growing as rows x widest row.
+                        var last = new ArrayList<>(tableCells.getLast());
+                        if (!last.isEmpty()) last.add(new Run(" ", false, false, false, null));
+                        last.addAll(cell);
+                        tableCells.set(tableCells.size() - 1, List.copyOf(last));
+                    }
                 }
             } else if (tag == HTML.Tag.TR) {
                 if (tableRows != null && tableCells != null && !tableCells.isEmpty()) {
