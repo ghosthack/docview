@@ -142,6 +142,26 @@ final class BlocksHtmlTest {
         Blocks.Model nested = Blocks.fromHtml("<div>".repeat(100) + "deep" + "</div>".repeat(100));
         assertEquals("deep", text(assertInstanceOf(Paragraph.class, nested.rows().getFirst()).runs()));
     }
+    @Test
+    void wideHtmlTableOverManyRowsStaysBounded() {
+        int n = 32_000; // about 0.9 MB of HTML; rows x widest row was 1G cells
+        String html = "<table><tr>" + "<td>a</td>".repeat(n) + "</tr>"
+                + "<tr><td>b</td></tr>".repeat(n) + "</table>";
+
+        List<Row> rows = assertTimeoutPreemptively(Duration.ofSeconds(20),
+                () -> Blocks.fromHtml(html).rows());
+
+        assertEquals(n + 1, rows.size());
+        var first = assertInstanceOf(TableRow.class, rows.getFirst());
+        assertEquals(SafeMarkupRenderer.MAX_TABLE_COLUMNS, first.cells().size());
+        assertEquals(SafeMarkupRenderer.MAX_TABLE_COLUMNS, first.table().columns());
+        int expectedTail = n - SafeMarkupRenderer.MAX_TABLE_COLUMNS + 1;
+        assertEquals(("a ".repeat(expectedTail)).strip(), text(first.cells().getLast()),
+                "cells past the cap join the last column");
+        var second = assertInstanceOf(TableRow.class, rows.get(1));
+        assertEquals("b", text(second.cells().getFirst()));
+    }
+
     private static String text(List<Run> runs) {
         var out = new StringBuilder();
         for (Run run : runs) out.append(run.text());
