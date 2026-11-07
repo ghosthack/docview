@@ -278,6 +278,12 @@ public final class BlockView {
             event.consume();
             return;
         }
+        // Leave modified keys (Ctrl+K, Cmd+Up, Ctrl+End, ...) to the
+        // application's own accelerators.
+        if (event.isShortcutDown() || event.isControlDown()
+                || event.isAltDown() || event.isMetaDown()) {
+            return;
+        }
         VirtualFlow<?> flow = flow();
         if (flow == null) return;
         double page = Math.max(ARROW_STEP, list.getHeight() - ARROW_STEP);

@@ -75,6 +75,38 @@ final class BlockViewTest {
         });
     }
 
+    @Test
+    void scrollKeysLeaveModifiedKeysToTheApplication() {
+        Fx.run(() -> {
+            var reader = new BlockView();
+            var root = new StackPane(reader.node());
+            new Scene(root, 800, 600);
+            reader.show(Path.of("a.md"), paragraphs("A"), ReaderStyle.defaults());
+            root.applyCss();
+            root.layout();
+            var reached = new ArrayList<javafx.scene.input.KeyCode>();
+            reader.node().addEventHandler(javafx.scene.input.KeyEvent.KEY_PRESSED,
+                    event -> reached.add(event.getCode()));
+
+            press(reader.node(), javafx.scene.input.KeyCode.K, false);
+            press(reader.node(), javafx.scene.input.KeyCode.DOWN, false);
+            assertTrue(reached.isEmpty(), "plain scroll keys are consumed");
+
+            for (var code : List.of(javafx.scene.input.KeyCode.K, javafx.scene.input.KeyCode.J,
+                    javafx.scene.input.KeyCode.UP, javafx.scene.input.KeyCode.END)) {
+                press(reader.node(), code, true);
+            }
+            assertEquals(List.of(javafx.scene.input.KeyCode.K, javafx.scene.input.KeyCode.J,
+                    javafx.scene.input.KeyCode.UP, javafx.scene.input.KeyCode.END), reached);
+        });
+    }
+
+    private static void press(Node target, javafx.scene.input.KeyCode code, boolean control) {
+        javafx.event.Event.fireEvent(target, new javafx.scene.input.KeyEvent(
+                javafx.scene.input.KeyEvent.KEY_PRESSED, "", "", code,
+                false, control, false, false));
+    }
+
     private static Blocks.Model paragraphs(String name) {
         var text = new StringBuilder();
         for (int i = 0; i < 1000; i++) text.append(name).append(' ').append(i).append("\n\n");
