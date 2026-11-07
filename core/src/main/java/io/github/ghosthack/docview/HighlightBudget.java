@@ -27,14 +27,17 @@ final class HighlightBudget {
         return spentNanos.get() >= limitNanos;
     }
 
-    /** Tokens for one line, or plain tokens once the budget is spent. */
+    /**
+     * Tokens for one line, or plain tokens once the budget is spent. The
+     * session gets the remaining budget as its allowance, so one call (which
+     * may tokenize every earlier line of a block) cannot run far past it, and
+     * is charged the tokenizing time it reports.
+     */
     java.util.List<HighlightToken> tokens(HighlightSession session, int line, String text) {
-        if (session == null || exhausted()) return HighlightEngines.plainLine(text);
-        long started = System.nanoTime();
-        try {
-            return session.tokensForLine(line);
-        } finally {
-            spentNanos.addAndGet(System.nanoTime() - started);
-        }
+        if (session == null) return HighlightEngines.plainLine(text);
+        long remaining = limitNanos - spentNanos.get();
+        if (remaining <= 0) return HighlightEngines.plainLine(text);
+        return session.tokensForLine(line, remaining,
+                spent -> spentNanos.addAndGet(Math.max(0, spent)));
     }
 }

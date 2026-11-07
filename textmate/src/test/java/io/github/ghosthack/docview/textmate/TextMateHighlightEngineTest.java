@@ -44,6 +44,43 @@ class TextMateHighlightEngineTest {
     }
 
     @Test
+    void oneCallStopsAtTheAllowanceItWasGiven() {
+        // A late line of a hostile block tokenizes every earlier line first;
+        // before allowances, that one call could spend the whole 1 s session
+        // budget past an almost spent document budget.
+        String text = ("`".repeat(1_999) + "\n").repeat(20);
+        DocumentContent document = DocumentContent.of(Path.of("a.md"), DocumentKind.MARKDOWN, text);
+        long allowance = 50_000_000L;
+        var reported = new java.util.concurrent.atomic.AtomicLong(-1);
+        try (HighlightSession session =
+                     HighlightEngines.open(HighlightEngines.TEXTMATE, document)) {
+            long started = System.nanoTime();
+            var tokens = session.tokensForLine(19, allowance, reported::set);
+            long millis = (System.nanoTime() - started) / 1_000_000;
+
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    HighlightEngines.plainLine("`".repeat(1_999)), tokens);
+            org.junit.jupiter.api.Assertions.assertTrue(millis < 500, "took " + millis + " ms");
+            org.junit.jupiter.api.Assertions.assertTrue(reported.get() >= 0, "time reported");
+            org.junit.jupiter.api.Assertions.assertTrue(reported.get() < allowance + 30_000_000L,
+                    "reported " + reported.get() / 1_000_000 + " ms");
+        }
+    }
+
+    @Test
+    void aZeroAllowanceTokenizesNothing() {
+        String text = "int x = 1;\n";
+        DocumentContent document = DocumentContent.of(Path.of("A.java"), DocumentKind.JAVA, text);
+        var reported = new java.util.concurrent.atomic.AtomicLong(-1);
+        try (HighlightSession session = HighlightEngines.open(HighlightEngines.TEXTMATE, document)) {
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    HighlightEngines.plainLine("int x = 1;"),
+                    session.tokensForLine(0, 0, reported::set));
+            org.junit.jupiter.api.Assertions.assertEquals(0, reported.get());
+        }
+    }
+
+    @Test
     void aSkippedLongLineDoesNotLeaveAStaleComment() {
         String text = "/*\n" + "x".repeat(2_500) + " */\nint x = 1;\n";
         DocumentContent document = DocumentContent.of(Path.of("A.java"), DocumentKind.JAVA, text);

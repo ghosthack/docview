@@ -187,14 +187,36 @@ public final class HighlightEngines {
             public List<HighlightToken> tokensForLine(int lineIndex) {
                 String line = lineText(document, lineIndex);
                 try {
-                    List<HighlightToken> tokens =
-                            delegate.tokensForLine(lineIndex);
-                    return validPartition(tokens, line.length())
-                            ? List.copyOf(tokens)
-                            : plainTokens(line);
+                    return checked(delegate.tokensForLine(lineIndex), line);
                 } catch (RuntimeException | LinkageError | StackOverflowError ignored) {
                     return plainTokens(line);
                 }
+            }
+
+            @Override
+            public List<HighlightToken> tokensForLine(int lineIndex, long maxNanos,
+                                                      java.util.function.LongConsumer spent) {
+                String line = lineText(document, lineIndex);
+                long started = System.nanoTime();
+                var reported = new boolean[1];
+                try {
+                    return checked(delegate.tokensForLine(lineIndex, maxNanos, nanos -> {
+                        reported[0] = true;
+                        spent.accept(nanos);
+                    }), line);
+                } catch (RuntimeException | LinkageError | StackOverflowError ignored) {
+                    return plainTokens(line);
+                } finally {
+                    // A session that failed (or forgot) to report is charged
+                    // its wall time, so a broken engine cannot dodge the budget.
+                    if (!reported[0]) spent.accept(System.nanoTime() - started);
+                }
+            }
+
+            private List<HighlightToken> checked(List<HighlightToken> tokens, String line) {
+                return validPartition(tokens, line.length())
+                        ? List.copyOf(tokens)
+                        : plainTokens(line);
             }
 
             @Override
