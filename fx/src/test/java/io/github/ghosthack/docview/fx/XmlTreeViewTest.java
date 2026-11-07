@@ -44,6 +44,37 @@ final class XmlTreeViewTest {
     }
 
     @Test
+    void scrollMemorySurvivesShowsBetweenLayoutPasses() {
+        Fx.run(() -> {
+            var view = new XmlTreeView();
+            var root = new javafx.scene.layout.StackPane(view.node());
+            new javafx.scene.Scene(root, 800, 600);
+            var style = ReaderStyle.defaults();
+            var source = new StringBuilder("<r>");
+            for (int i = 0; i < 500; i++) source.append("<e a='1'><c>x</c><d><f>1</f></d></e>");
+            String text = source.append("</r>").toString();
+            XmlTree.Tree x = XmlTree.parse(text), y = XmlTree.parse(text), z = XmlTree.parse(text);
+
+            view.show(Path.of("x.xml"), x, style, text);
+            root.applyCss();
+            root.layout();
+            table(view).scrollTo(200);
+            root.layout();
+            int rowOfX = BlockViewTest.firstVisible(table(view));
+            assertTrue(rowOfX > 150, "X is scrolled down");
+            view.show(Path.of("y.xml"), y, style, text);
+            view.show(Path.of("z.xml"), z, style, text);
+            root.layout();
+            view.show(Path.of("y.xml"), y, style, text);
+            root.layout();
+            assertEquals(0, BlockViewTest.firstVisible(table(view)), "Y was never scrolled");
+            view.show(Path.of("x.xml"), x, style, text);
+            root.layout();
+            assertEquals(rowOfX, BlockViewTest.firstVisible(table(view)), "X keeps its row");
+        });
+    }
+
+    @Test
     void clearRemovesParseErrorPanel() {
         Fx.run(() -> {
             var view = new XmlTreeView();

@@ -46,6 +46,47 @@ final class BlockViewTest {
     }
 
     @Test
+    void scrollMemorySurvivesShowsBetweenLayoutPasses() {
+        Fx.run(() -> {
+            var reader = new BlockView();
+            var root = new StackPane(reader.node());
+            new Scene(root, 800, 600);
+            var list = (javafx.scene.control.ListView<?>) reader.node();
+            var style = ReaderStyle.defaults();
+            Blocks.Model a = paragraphs("A"), b = paragraphs("B"), c = paragraphs("C");
+
+            reader.show(Path.of("a.md"), a, style);
+            root.applyCss();
+            root.layout();
+            list.scrollTo(300);
+            root.layout();
+            int rowOfA = firstVisible(list);
+            assertTrue(rowOfA > 250, "A is scrolled down");
+            // Fast browsing: B and C are shown before any layout pass.
+            reader.show(Path.of("b.md"), b, style);
+            reader.show(Path.of("c.md"), c, style);
+            root.layout();
+            reader.show(Path.of("b.md"), b, style);
+            root.layout();
+            assertEquals(0, firstVisible(list), "B was never scrolled");
+            reader.show(Path.of("a.md"), a, style);
+            root.layout();
+            assertEquals(rowOfA, firstVisible(list), "A keeps its row");
+        });
+    }
+
+    private static Blocks.Model paragraphs(String name) {
+        var text = new StringBuilder();
+        for (int i = 0; i < 1000; i++) text.append(name).append(' ').append(i).append("\n\n");
+        return Blocks.fromMarkdown(text.toString(), HighlightEngines.NONE);
+    }
+
+    static int firstVisible(javafx.scene.Parent control) {
+        var flow = (javafx.scene.control.skin.VirtualFlow<?>) control.lookup(".virtual-flow");
+        return flow.getFirstVisibleCell().getIndex();
+    }
+
+    @Test
     void positionsOrderByRowThenOffset() {
         var early = new BlockView.Position(1, 9);
         var late = new BlockView.Position(2, 0);

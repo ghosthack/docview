@@ -120,6 +120,12 @@ public final class BlockView {
     /** Link text under the last primary press; only it may activate on release. */
     private Text pressedLink;
 
+    /**
+     * The row last scrolled to, until a layout pass has moved the flow there;
+     * until then the flow's first visible cell still shows the old layout.
+     */
+    private Integer pendingRow;
+
     /** A caret position: a row and an offset into its {@link #rowText}. */
     record Position(int row, int offset) implements Comparable<Position> {
         @Override
@@ -130,6 +136,9 @@ public final class BlockView {
     }
 
     public BlockView() {
+        list.needsLayoutProperty().addListener((property, was, now) -> {
+            if (!now) pendingRow = null;
+        });
         list.setFocusTraversable(true);
         applyListStyle();
         list.setCellFactory(ignored -> new RowCell());
@@ -207,7 +216,7 @@ public final class BlockView {
         fonts = new Fonts(readerStyle);
         list.getItems().setAll(next.rows());
         int row = rememberedRows.getOrDefault(documentPath, 0);
-        list.scrollTo(Math.max(0, Math.min(row, next.rows().size() - 1)));
+        scrollToRow(Math.max(0, Math.min(row, next.rows().size() - 1)));
     }
 
     /** Records the current document's first visible row for a later return. */
@@ -220,6 +229,7 @@ public final class BlockView {
         anchor = focus = null;
         model = null;
         path = null;
+        pendingRow = null;
         list.getItems().clear();
     }
 
@@ -227,7 +237,7 @@ public final class BlockView {
         if (model == null) return false;
         int row = model.rowOfAnchor(anchor);
         if (row < 0) return false;
-        list.scrollTo(row);
+        scrollToRow(row);
         return true;
     }
 
@@ -235,7 +245,14 @@ public final class BlockView {
         list.requestFocus();
     }
 
+    private void scrollToRow(int row) {
+        list.scrollTo(row);
+        pendingRow = row;
+        list.requestLayout();
+    }
+
     private int firstVisibleRow() {
+        if (pendingRow != null) return pendingRow;
         VirtualFlow<?> flow = flow();
         if (flow == null || flow.getFirstVisibleCell() == null) return 0;
         return flow.getFirstVisibleCell().getIndex();
@@ -269,8 +286,8 @@ public final class BlockView {
             case DOWN, J -> flow.scrollPixels(ARROW_STEP);
             case PAGE_UP -> flow.scrollPixels(-page);
             case PAGE_DOWN, SPACE -> flow.scrollPixels(event.isShiftDown() ? -page : page);
-            case HOME -> list.scrollTo(0);
-            case END -> list.scrollTo(Math.max(0, list.getItems().size() - 1));
+            case HOME -> scrollToRow(0);
+            case END -> scrollToRow(Math.max(0, list.getItems().size() - 1));
             default -> {
                 return;
             }

@@ -68,6 +68,8 @@ public final class XmlTreeView {
 
     private final BorderPane root = new BorderPane();
     private final TreeTableView<XmlNode> table = new TreeTableView<>();
+    /** The row last scrolled to, until a layout pass has moved the flow there. */
+    private Integer pendingRow;
     private ReaderTheme theme = ReaderTheme.dark();
     private final TreeTableColumn<XmlNode, XmlNode> tagColumn = new TreeTableColumn<>("NODE TAG");
     private final TreeTableColumn<XmlNode, XmlNode> valueColumn =
@@ -101,6 +103,9 @@ public final class XmlTreeView {
     }
 
     public XmlTreeView() {
+        table.needsLayoutProperty().addListener((property, was, now) -> {
+            if (!now) pendingRow = null;
+        });
         root.getStyleClass().add("docview-xml-tree");
         applyThemeStyle();
         var css = XmlTreeView.class.getResource("xml-tree-view.css");
@@ -235,6 +240,9 @@ public final class XmlTreeView {
         layoutColumns();
         table.getSelectionModel().clearSelection();
         table.scrollTo(restored ? state.firstRow() : 0);
+        // Until a layout pass, the flow still shows the previous document.
+        pendingRow = restored ? state.firstRow() : 0;
+        table.requestLayout();
         table.refresh();
     }
 
@@ -346,6 +354,7 @@ public final class XmlTreeView {
     }
 
     private int firstVisibleRow() {
+        if (pendingRow != null) return pendingRow;
         if (table.lookup(".virtual-flow") instanceof VirtualFlow<?> flow
                 && flow.getFirstVisibleCell() != null) {
             return flow.getFirstVisibleCell().getIndex();
