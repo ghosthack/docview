@@ -346,7 +346,9 @@ public final class XmlTreeView {
         } else if (selectAllKey != null && selectAllKey.match(event)) {
             table.getSelectionModel().selectAll();
             event.consume();
-        } else if (event.getCode() == KeyCode.SPACE) {
+        } else if (event.getCode() == KeyCode.SPACE && !event.isShortcutDown()
+                && !event.isControlDown() && !event.isAltDown() && !event.isMetaDown()) {
+            // Modified Space (Ctrl+Space, ...) stays with the application.
             TreeItem<XmlNode> focused = table.getFocusModel().getFocusedItem();
             if (focused != null && !focused.isLeaf()) focused.setExpanded(!focused.isExpanded());
             event.consume();
