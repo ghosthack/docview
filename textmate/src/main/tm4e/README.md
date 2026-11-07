@@ -6,7 +6,9 @@ This directory vendors the pure-Java core of
 additional Maven source root because TM4E releases are distributed as
 Eclipse/p2 bundles rather than Maven Central artifacts.
 
-The source remains under EPL-2.0; see `LICENSE`. Changes made for docview:
+The source remains under EPL-2.0; see `LICENSE`. Code that TM4E translated
+from MIT projects keeps those notices in `NOTICE-MIT.txt`. Changes made for
+docview:
 
 - packages relocated from `org.eclipse.tm4e` to
   `io.github.ghosthack.docview.textmate.internal.tm4e`, so docview never

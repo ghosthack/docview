@@ -75,6 +75,7 @@
         <targetPath>META-INF/licenses/tm4e</targetPath>
         <includes>
           <include>LICENSE</include>
+          <include>NOTICE-MIT.txt</include>
           <include>README.md</include>
         </includes>
       </resource>
