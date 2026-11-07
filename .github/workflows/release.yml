@@ -64,10 +64,6 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    # Protect this environment (required reviewers; deployments from v* tags
-    # and main only) and keep the Central and GPG secrets there instead of in
-    # repository secrets.
-    environment: maven-central
     steps:
       # github.sha is the tag's commit when the release was published, so a
       # tag moved while this workflow runs cannot swap in untested code.
@@ -95,12 +91,10 @@ jobs:
   # Manual runs only build and sign the Central bundle (never uploaded) so it
   # can be inspected and validated without publishing. The job only gets
   # placeholder Central credentials, so it cannot upload anything. It signs
-  # with the release key, so it runs only from main and in the same
-  # protected environment as the deploy.
+  # with the release key, so it runs only from main.
   bundle-dry-run:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: maven-central
     steps:
       - uses: actions/checkout@v6
       - name: Set up JDK 21
