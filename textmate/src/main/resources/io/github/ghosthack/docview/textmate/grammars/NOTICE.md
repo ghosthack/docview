@@ -6,7 +6,9 @@ repository at commit `3cd0ed67506d43e342dcf2835e719cd64de68ffc`, which
 bundles them from the upstream projects below (see each extension's
 `cgmanifest.json` there). The
 VS Code repository's MIT license is included as `LICENSE-VSCODE.txt`; the
-TextMate Bundle License is included as `LICENSE-TEXTMATE-BUNDLES.txt`.
+TextMate Bundle License is included as `LICENSE-TEXTMATE-BUNDLES.txt`; the
+copyright and permission notice of each MIT upstream below is reproduced in
+`THIRD-PARTY-NOTICES.txt`.
 
 | File | Scope | Upstream (commit) | License |
 |---|---|---|---|
@@ -26,5 +28,6 @@ TextMate Bundle License is included as `LICENSE-TEXTMATE-BUNDLES.txt`.
 | `xml.tmLanguage.json` | `text.xml` | [atom/language-xml](https://github.com/atom/language-xml) (`7bc75df`) | MIT |
 | `yaml.tmLanguage.json` | `source.yaml` | [textmate/yaml.tmbundle](https://github.com/textmate/yaml.tmbundle) (`e54ceae`), converted by VS Code | TextMate Bundle License |
 
-The Eclipse TM4E core that tokenizes these grammars is EPL-2.0; its license
-and notes ship in this jar under `META-INF/licenses/tm4e/`.
+The Eclipse TM4E core that tokenizes these grammars is EPL-2.0; its license,
+notes and the MIT notices of the code it derives from ship in this jar under
+`META-INF/licenses/tm4e/`.
